@@ -43,6 +43,7 @@ mkdir -p "$PKG/DEBIAN" "$PKG/usr/bin" "$PKG/usr/lib/$PACKAGE" \
 # ---- 程序本体 ----
 install -m 755 "$PROJECT_DIR/wallpaper-picker.py" "$PKG/usr/lib/$PACKAGE/"
 install -m 755 "$PROJECT_DIR/start-wallpaper.sh"  "$PKG/usr/lib/$PACKAGE/"
+install -m 755 "$PROJECT_DIR/packaging/enable-extension.py" "$PKG/usr/lib/$PACKAGE/"
 
 # 命令行入口
 cat > "$PKG/usr/bin/wallpaper-picker" <<EOF
@@ -99,49 +100,36 @@ EOF
 cat > "$PKG/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e
-UUID="linux-wallpaperengine@github.io"
 
-# 把系统级扩展加入当前用户的启用列表
-if command -v gsettings >/dev/null 2>&1 && [ -n "${SUDO_USER:-}" ]; then
-    su "$SUDO_USER" -c "python3 - '$UUID' <<'PY'
-import ast, subprocess, sys
-uuid = sys.argv[1]
-cur = subprocess.run(['gsettings', 'get', 'org.gnome.shell', 'enabled-extensions'],
-                     capture_output=True, text=True).stdout.strip()
-try:
-    lst = ast.literal_eval(cur) if cur else []
-except Exception:
-    lst = []
-if uuid not in lst:
-    lst.append(uuid)
-    subprocess.run(['gsettings', 'set', 'org.gnome.shell', 'enabled-extensions',
-                    str(lst)], check=False)
-PY" || true
+# 把扩展加入「发起安装的那个用户」的启用列表。
+# 只在能确定用户身份时动手，否则留一句提示，不擅自改别人的配置。
+HELPER=/usr/lib/wallpaper-engine-gnome/enable-extension.py
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    if command -v sudo >/dev/null 2>&1; then
+        sudo -u "$SUDO_USER" python3 "$HELPER" || true
+    else
+        su "$SUDO_USER" -c "python3 $HELPER" || true
+    fi
 fi
 
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database -q /usr/share/applications || true
 fi
-echo "安装完成。首次使用需要注销后重新登录一次，GNOME Shell 才会加载扩展。"
+
+echo "wallpaper-engine-gnome 已安装。"
+echo "若这是首次安装，请注销后重新登录一次，GNOME Shell 才会加载扩展。"
 EOF
 
 cat > "$PKG/DEBIAN/prerm" <<'EOF'
 #!/bin/sh
 set -e
-# 卸载时把扩展从启用列表里摘掉，免得留下无效条目
-if command -v gsettings >/dev/null 2>&1 && [ -n "${SUDO_USER:-}" ]; then
-    su "$SUDO_USER" -c "python3 - <<'PY'
-import ast, subprocess
-uuid = 'linux-wallpaperengine@github.io'
-cur = subprocess.run(['gsettings', 'get', 'org.gnome.shell', 'enabled-extensions'],
-                     capture_output=True, text=True).stdout.strip()
-try:
-    lst = [x for x in ast.literal_eval(cur) if x != uuid] if cur else []
-except Exception:
-    lst = []
-subprocess.run(['gsettings', 'set', 'org.gnome.shell', 'enabled-extensions',
-                str(lst)], check=False)
-PY" || true
+HELPER=/usr/lib/wallpaper-engine-gnome/enable-extension.py
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && [ -f "$HELPER" ]; then
+    if command -v sudo >/dev/null 2>&1; then
+        sudo -u "$SUDO_USER" python3 "$HELPER" --disable || true
+    else
+        su "$SUDO_USER" -c "python3 $HELPER --disable" || true
+    fi
 fi
 EOF
 
