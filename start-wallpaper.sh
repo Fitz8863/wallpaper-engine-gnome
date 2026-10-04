@@ -29,8 +29,52 @@ STATE_DIR="${LWE_STATE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/wallpaper-picker}"
 LIST="$STATE_DIR/wallpapers.txt"
 LOG="$STATE_DIR/wallpaper.log"
 PIDFILE="$STATE_DIR/wallpaper.pid"
+SETTINGS="$STATE_DIR/settings.json"
 
 mkdir -p "$STATE_DIR"
+
+# 把 settings.json 翻译成渲染器参数。
+# 图形化选择器改的就是这份配置，所以界面和命令行的行为保持一致。
+build_flags() {
+    local wid="$1"
+    [ -f "$SETTINGS" ] || return 0
+    python3 - "$SETTINGS" "$wid" <<'PY'
+import json, sys
+
+path, wid = sys.argv[1], sys.argv[2]
+try:
+    cfg = json.load(open(path, encoding='utf-8'))
+except Exception:
+    sys.exit(0)
+
+flags = []
+if cfg.get('silent'):
+    flags.append('--silent')
+
+volume = cfg.get('volume')
+if isinstance(volume, (int, float)) and int(volume) != 15:
+    flags += ['--volume', str(int(volume))]
+
+fps = cfg.get('fps')
+if isinstance(fps, (int, float)):
+    flags += ['--fps', str(int(fps))]
+
+scaling = cfg.get('scaling')
+if scaling and scaling != 'default':
+    flags += ['--scaling', str(scaling)]
+
+for key, disabled in (('particles', '--disable-particles'),
+                      ('parallax', '--disable-parallax'),
+                      ('mouse', '--disable-mouse')):
+    if cfg.get(key) is False:
+        flags.append(disabled)
+
+for name, value in (cfg.get('properties') or {}).get(wid, {}).items():
+    flags += ['--set-property', f'{name}={value}']
+
+print('\n'.join(flags))
+PY
+}
 
 # 在常见的 Steam 安装布局里找创意工坊目录
 find_workshop() {
@@ -130,11 +174,14 @@ fi
 # 先停掉旧实例
 pkill -f "linux-wallpaperengine.*--gnome" 2>/dev/null && sleep 1
 
-# 后台常驻启动
+# 从设置文件生成参数；命令行透传的参数放最后，可以覆盖设置里的值
+mapfile -t FLAGS < <(build_flags "$BG")
+
 nohup "$BIN" \
     --gnome \
     --screen-root "$SCREEN" \
     --bg "$BG" \
+    ${FLAGS[@]+"${FLAGS[@]}"} \
     "$@" \
     > "$LOG" 2>&1 &
 

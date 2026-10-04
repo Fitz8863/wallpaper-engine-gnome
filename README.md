@@ -12,9 +12,22 @@
 
 - **图形化选择器**：缩略图网格浏览全部已订阅壁纸，支持搜索、按类型（场景/视频/网页）筛选
 - **点击即切换**，当前生效的壁纸有高亮标记
+- **右侧属性面板**（布局参考 Wallpaper Engine）：
+  - **壁纸属性**——自动读取每张壁纸自己的可调项，按类型生成控件（开关 / 滑块 /
+    下拉 / 取色器），改动即时生效。不同壁纸的可调项差别很大，从 0 项到几十项都有
+  - **播放设置**——静音、音量、帧率上限、缩放模式、粒子/视差/鼠标交互开关，全局生效
+- **设置持久化**：写入 `settings.json`，界面和命令行共用同一份配置
 - **登录自启**：切换壁纸时自动记住，下次开机还是它
 - **命令行**：可脚本化调用，支持 ID、名称关键词、播放列表
-- **限帧省电**：笔记本上可限制帧率降低 GPU 功耗
+
+### 关于"播放速度"
+
+渲染器**没有全局倍速参数**。速度是通过壁纸自带属性实现的——不少场景壁纸带有
+`scrollspeed`、`pbrscrollspeed`、`pxbrrollingspeed` 这类属性，选中该壁纸后会在
+「壁纸属性」里出现对应的控件。若某张壁纸没有这类属性，则它本身就不支持变速。
+
+同样地，「缩放模式」对应渲染器的 `--scaling`，可选
+默认 / 填充（裁切边缘）/ 适应（保留黑边）/ 拉伸。
 
 ## 环境要求
 
@@ -64,9 +77,12 @@ curl -L -C - --retry 10 "$URL" \
 
 ```bash
 python3 ~/projects/wallpaper/wallpaper-picker.py
+python3 ~/projects/wallpaper/wallpaper-picker.py --select 3422875812   # 启动时预选某张
 ```
 
-点击任意壁纸卡片即切换；右上角「停止」可关闭动态壁纸。
+点击任意壁纸卡片即应用；右侧面板显示这张壁纸自己的可调项；右上角「停止」可关闭
+动态壁纸。改动设置不需要手动保存，会自动写盘并重新加载壁纸（带防抖，拖滑块不会
+把渲染器反复重启）。
 
 ### 命令行
 
@@ -93,6 +109,35 @@ python3 ~/projects/wallpaper/wallpaper-picker.py
 gdbus call --session --dest org.gnome.Mutter.DisplayConfig \
   --object-path /org/gnome/Mutter/DisplayConfig \
   --method org.gnome.Mutter.DisplayConfig.GetResources | grep -oP "'[a-zA-Z0-9-]+'"
+```
+
+### 配置文件
+
+界面上的改动会写入 `~/.cache/wallpaper-picker/settings.json`，`start-wallpaper.sh`
+启动时会读取它并翻译成渲染器参数——所以图形界面和命令行的行为始终一致。
+
+```json
+{
+  "silent": false,
+  "volume": 15,
+  "fps": 30,
+  "scaling": "default",
+  "particles": true,
+  "parallax": true,
+  "mouse": true,
+  "properties": {
+    "3422875812": { "clouds": "0", "music": "0.3" }
+  }
+}
+```
+
+`properties` 是逐壁纸的，键是壁纸 ID，值是属性名到属性值的映射。删掉这个文件即可
+恢复渲染器默认值。
+
+命令行透传的参数优先级更高，会覆盖设置文件里的值：
+
+```bash
+./start-wallpaper.sh 3050160027 -f 60     # 这一次用 60 帧，不改设置文件
 ```
 
 ## 工作原理
@@ -143,6 +188,12 @@ gdbus call --session --dest org.gnome.Mutter.DisplayConfig \
   取首帧再 `scale_simple`。工坊壁纸里 GIF 预览很常见。
 - **暗色壁纸缩略图**：不少壁纸本身平均亮度极低，缩略图铺在深色卡片上会和背景糊成
   一片，需要加描边。
+- **解析 `--list-properties` 的坑**：输出是「属性名 - 类型」加缩进的 `Text:` /
+  `Value:` 行，但组合类型的候选项（`Values:` 后的 `0 = 24H`）缩进两格且 `Values:`
+  顶格。更要命的是跳过某个属性类型时必须把「当前属性」置空，否则它后面那些缩进的
+  行会被算到上一个属性头上——表现为某个滑块的标题莫名其妙变成小写的内部名。
+- **`Gdk.RGBA(...)` 在 PyGObject 里不能传构造参数**：会静默忽略并给一个全透明色，
+  只能先建对象再逐个赋值。
 - **免注销验证渲染**：调试时不必每次都注销看效果，用窗口模式直接出图：
   ```bash
   ./linux-wallpaperengine -w 50x50x1280x720 --bg <ID> \

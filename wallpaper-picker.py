@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """Wallpaper Engine 壁纸选择器 —— GNOME 原生 GTK4 / libadwaita 界面
 
-列出本地 Steam 创意工坊里已订阅的全部壁纸，点一下即切换。
-底层调用同目录下的 start-wallpaper.sh（渲染器 + GNOME 扩展）。
+左侧是壁纸网格，右侧是可折叠的属性面板（布局参考 Wallpaper Engine）。
+
+设置分两层：
+  播放设置  全局生效（静音、音量、帧率、缩放模式、特效开关）
+  壁纸属性  逐壁纸生效，由渲染器的 --list-properties 动态读出，
+            按 boolean/slider/combo 生成对应控件，经 --set-property 回传
+
+设置写到 STATE_DIR/settings.json，start-wallpaper.sh 启动时会读取并翻译成
+命令行参数，因此图形界面和命令行行为一致。
 """
 
 import glob
@@ -10,6 +17,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 
 import gi
 
@@ -28,14 +36,16 @@ SCRIPT = os.path.join(ROOT, "start-wallpaper.sh")
 AUTOSTART = f"{HOME}/.config/autostart/wallpaper-engine.desktop"
 EXT_UUID = "linux-wallpaperengine@github.io"
 
-# 运行时状态放在缓存目录，不污染源码树（与 start-wallpaper.sh 保持一致）
 STATE_DIR = os.environ.get(
     "LWE_STATE_DIR",
     os.path.join(os.environ.get("XDG_CACHE_HOME", f"{HOME}/.cache"),
                  "wallpaper-picker"))
 PIDFILE = os.path.join(STATE_DIR, "wallpaper.pid")
+SETTINGS_FILE = os.path.join(STATE_DIR, "settings.json")
 
-# 常见的 Steam 安装布局，按优先级排列
+RENDERER = os.environ.get(
+    "LWE_BIN", f"{HOME}/linux-wallpaperengine/build/output/linux-wallpaperengine")
+
 WORKSHOP_CANDIDATES = [
     f"{HOME}/.local/share/Steam/steamapps/workshop/content/431960",
     f"{HOME}/.steam/steam/steamapps/workshop/content/431960",
@@ -44,46 +54,109 @@ WORKSHOP_CANDIDATES = [
     "/steamapps/workshop/content/431960",
 ]
 
+TYPE_LABEL = {"scene": "场景", "video": "视频", "web": "网页"}
+THUMB = 320
+
+DEFAULT_SETTINGS = {
+    "silent": False,
+    "volume": 15,
+    "fps": 30,
+    "scaling": "default",
+    "particles": True,
+    "parallax": True,
+    "mouse": True,
+    "properties": {},
+}
+
+# 渲染器 --scaling 的合法取值（实测自 "allowed options" 报错信息）
+SCALING_CHOICES = [
+    ("default", "默认"),
+    ("fill", "填充（裁切边缘）"),
+    ("fit", "适应（保留黑边）"),
+    ("stretch", "拉伸（可能变形）"),
+]
+
+CSS = """
+.wallpaper-card {
+    border-radius: 12px;
+    background-color: alpha(currentColor, 0.06);
+    padding: 6px;
+}
+.wallpaper-card:hover   { background-color: alpha(currentColor, 0.12); }
+.wallpaper-card-current { background-color: alpha(@accent_bg_color, 0.28); }
+.wallpaper-card-current:hover { background-color: alpha(@accent_bg_color, 0.38); }
+.card-title { font-size: 0.86em; font-weight: 500; }
+.card-badge { font-size: 0.72em; opacity: 0.6; }
+.thumb {
+    border-radius: 8px;
+    /* 描边是必须的：不少壁纸本身就很暗，没有边界会和卡片糊成一片 */
+    outline: 1px solid alpha(currentColor, 0.18);
+    outline-offset: -1px;
+}
+.preview-frame {
+    border-radius: 10px;
+    outline: 1px solid alpha(currentColor, 0.15);
+    outline-offset: -1px;
+    background-color: alpha(currentColor, 0.05);
+}
+.sidebar-title { font-size: 1.15em; font-weight: 700; }
+.section-title { font-weight: 700; opacity: 0.75; font-size: 0.82em; }
+.empty-hint { opacity: 0.6; }
+"""
+
+
+# --------------------------------------------------------------- 配置读写
+
+def load_settings():
+    data = dict(DEFAULT_SETTINGS)
+    data["properties"] = {}
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as fh:
+            disk = json.load(fh)
+        for key, value in disk.items():
+            if key == "properties" and isinstance(value, dict):
+                data["properties"] = value
+            elif key in data:
+                data[key] = value
+    except Exception:
+        pass
+    return data
+
+
+def save_settings(data):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    tmp = f"{SETTINGS_FILE}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, SETTINGS_FILE)
+
+
+# --------------------------------------------------------------- 数据模型
+
+class Wallpaper:
+    __slots__ = ("wid", "wtype", "title", "preview", "dir")
+
+    def __init__(self, wid, wtype, title, preview, directory):
+        self.wid = wid
+        self.wtype = wtype
+        self.title = title
+        self.preview = preview
+        self.dir = directory
+
 
 def find_workshop():
-    """返回创意工坊内容目录；都找不到时返回 None。"""
     for path in WORKSHOP_CANDIDATES:
         if os.path.isdir(path):
             return path
     return None
 
 
-TYPE_LABEL = {"scene": "场景", "video": "视频", "web": "网页"}
-THUMB = 300  # 缩略图边长，42 张全载入约 15MB
-
-CSS = """
-.card {
-    border-radius: 12px;
-    background-color: alpha(currentColor, 0.06);
-    padding: 6px;
-}
-.card:hover   { background-color: alpha(currentColor, 0.12); }
-.card-current { background-color: alpha(@accent_bg_color, 0.30); }
-.card-title   { font-size: 0.85em; }
-.card-badge   { font-size: 0.72em; opacity: 0.65; }
-.thumb {
-    border-radius: 8px;
-    /* 描边是必须的：不少壁纸本身就很暗，没有边界会和深色卡片糊成一片 */
-    outline: 1px solid alpha(currentColor, 0.18);
-    outline-offset: -1px;
-}
-"""
-
-
 def load_thumbnail(path, size):
     """载入缩略图。
 
-    两个坑要注意：
-    1. GdkPixbuf 的 new_from_file_at_scale 遇到 GIF 动图会直接抛
-       "Not all frames of the GIF image were loaded"，所以动图得另走
-       PixbufAnimation 取首帧再自己缩放。
-    2. 不少壁纸本身画面极暗，纹理带 alpha 的先合成到深色底上，
-       免得和卡片背景糊在一起。
+    两个坑：GdkPixbuf 的 new_from_file_at_scale 遇到 GIF 动图会抛
+    "Not all frames of the GIF image were loaded"，动图得另走 PixbufAnimation
+    取首帧再缩放；另外不少壁纸画面极暗，带 alpha 的先合成到深色底上。
     """
     try:
         pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, size, size, True)
@@ -108,27 +181,16 @@ def load_thumbnail(path, size):
     return flat
 
 
-class Wallpaper:
-    __slots__ = ("wid", "wtype", "title", "preview")
-
-    def __init__(self, wid, wtype, title, preview):
-        self.wid = wid
-        self.wtype = wtype
-        self.title = title
-        self.preview = preview
-
-
 def scan_wallpapers():
-    """扫描本地创意工坊目录，返回壁纸列表。"""
     workshop = find_workshop()
     if workshop is None:
         return []
     found = []
-    for d in sorted(glob.glob(os.path.join(workshop, "*/"))):
-        pj = os.path.join(d, "project.json")
+    for path in sorted(glob.glob(os.path.join(workshop, "*/"))):
+        pj = os.path.join(path, "project.json")
         if not os.path.exists(pj):
             continue
-        wid = os.path.basename(d.rstrip("/"))
+        wid = os.path.basename(path.rstrip("/"))
         try:
             meta = json.load(open(pj, encoding="utf-8-sig"))
             title = str(meta.get("title", wid)).strip()
@@ -137,21 +199,20 @@ def scan_wallpapers():
             title, wtype = f"{wid}（配置无法解析）", "?"
         preview = ""
         for name in ("preview.jpg", "preview.png", "preview.gif"):
-            if os.path.exists(os.path.join(d, name)):
-                preview = os.path.join(d, name)
+            if os.path.exists(os.path.join(path, name)):
+                preview = os.path.join(path, name)
                 break
-        found.append(Wallpaper(wid, wtype, title, preview))
+        found.append(Wallpaper(wid, wtype, title, preview, path))
     order = {"scene": 0, "video": 1, "web": 2}
     found.sort(key=lambda w: (order.get(w.wtype, 9), w.title))
     return found
 
 
 def running_wallpaper_id():
-    """当前正在渲染的壁纸 ID；用 pidfile + 进程命令行双重确认。"""
     try:
         pid = open(PIDFILE).read().strip()
-        cmdline = open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")
-        args = [a.decode() for a in cmdline if a]
+        args = [a.decode() for a in
+                open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0") if a]
         if "--bg" in args:
             return args[args.index("--bg") + 1]
     except Exception:
@@ -160,24 +221,115 @@ def running_wallpaper_id():
 
 
 def extension_loaded():
-    """GNOME Shell 是否已经加载了扩展（注销重登后才为真）。"""
     try:
-        out = subprocess.run(
-            ["gnome-extensions", "info", EXT_UUID],
-            capture_output=True, text=True, timeout=10,
-        )
-        return out.returncode == 0
+        return subprocess.run(["gnome-extensions", "info", EXT_UUID],
+                              capture_output=True, text=True,
+                              timeout=10).returncode == 0
     except Exception:
         return False
 
 
-class PickerWindow(Adw.ApplicationWindow):
+# --------------------------------------------------- 渲染器属性列表解析
+
+def clean_label(text, fallback):
+    """属性的 Text 字段有时是整段 HTML 或 i18n 键名，不适合直接当标题。"""
+    text = (text or "").strip()
+    if not text or "<" in text or text.startswith("ui_"):
+        return fallback
+    return text
+
+
+def parse_properties(raw):
+    """解析 `--list-properties` 的输出。
+
+    格式形如::
+
+        bokehblue - boolean
+            Text: Bokeh Blue
+            Value: 1
+
+        clock - combo
+            Text: Clock
+            Value: 0
+        Values:
+            0 = 24H
+            1 = 12H
+    """
+    props = []
+    cur = None
+    in_values = False
+
+    for line in raw.splitlines():
+        if not line.strip() or line.startswith("Running with:"):
+            continue
+
+        if line.startswith("Values:"):
+            in_values = True
+            continue
+
+        if line.startswith("\t\t") and cur is not None and in_values:
+            value, _, label = line.strip().partition("=")
+            cur["options"].append((value.strip(), label.strip()))
+            continue
+
+        if line.startswith("\t"):
+            key, _, value = line.strip().partition(":")
+            key, value = key.strip(), value.strip()
+            if cur is None:
+                continue
+            if key == "Text":
+                cur["label"] = clean_label(value, cur["name"])
+            elif key == "Value":
+                cur["value"] = value
+            elif key in ("Min", "Max", "Step"):
+                cur[key.lower()] = value
+            continue
+
+        in_values = False
+        name, sep, ptype = line.partition(" - ")
+        if not sep:
+            continue
+        ptype = ptype.strip()
+        if ptype not in ("boolean", "slider", "combo", "color"):
+            # 跳过的类型必须清空 cur，否则它后续缩进的 Text/Value 行
+            # 会被错误地算到上一个属性头上
+            cur = None
+            continue
+        cur = {"name": name.strip(), "type": ptype, "label": name.strip(),
+               "value": "", "min": None, "max": None, "step": None,
+               "options": []}
+        props.append(cur)
+
+    return props
+
+
+def fetch_properties(wid):
+    """跑一次渲染器读出该壁纸的可调属性（耗时，需放到后台线程）。"""
+    if not os.access(RENDERER, os.X_OK):
+        return []
+    try:
+        out = subprocess.run(
+            [RENDERER, "--bg", wid, "--list-properties"],
+            capture_output=True, text=True, timeout=60)
+    except Exception:
+        return []
+    return parse_properties(out.stdout)
+
+
+# ------------------------------------------------------------------ 界面
+
+class WallpaperPicker(Adw.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="壁纸", default_width=1100,
-                         default_height=760)
+        super().__init__(application=app, title="壁纸", default_width=1280,
+                         default_height=820)
+        self.settings = load_settings()
         self.wallpapers = []
         self.current_id = None
+        self.selected = None
         self.cards = {}
+        self.prop_rows = []
+        self._reapply_source = None
+        self._props_token = 0
 
         provider = Gtk.CssProvider()
         provider.load_from_string(CSS)
@@ -186,63 +338,235 @@ class PickerWindow(Adw.ApplicationWindow):
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
         self.toast_overlay = Adw.ToastOverlay()
-        toolbar = Adw.ToolbarView()
-        self.toast_overlay.set_child(toolbar)
         self.set_content(self.toast_overlay)
 
-        header = Adw.HeaderBar()
-        toolbar.add_top_bar(header)
+        self.split = Adw.OverlaySplitView(
+            sidebar_position=Gtk.PackType.END,
+            min_sidebar_width=330, max_sidebar_width=400,
+            collapsed=False)
+        self.toast_overlay.set_child(self.split)
 
-        self.search = Gtk.SearchEntry(placeholder_text="搜索壁纸…", width_chars=22)
+        self.split.set_content(self.build_content())
+        self.split.set_sidebar(self.build_sidebar())
+
+        self.reload()
+
+    # ---------------------------------------------------------- 主区域
+
+    def build_content(self):
+        view = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+
+        self.search = Gtk.SearchEntry(placeholder_text="搜索壁纸…",
+                                      width_chars=24)
         self.search.connect("search-changed", lambda *_: self.populate())
         header.set_title_widget(self.search)
 
-        refresh_btn = Gtk.Button(icon_name="view-refresh-symbolic",
-                                 tooltip_text="重新扫描壁纸")
-        refresh_btn.connect("clicked", lambda *_: self.reload())
-        header.pack_start(refresh_btn)
+        refresh = Gtk.Button(icon_name="view-refresh-symbolic",
+                             tooltip_text="重新扫描壁纸")
+        refresh.connect("clicked", lambda *_: self.reload())
+        header.pack_start(refresh)
 
-        self.stop_btn = Gtk.Button(label="停止", tooltip_text="停止当前动态壁纸")
-        self.stop_btn.add_css_class("destructive-action")
+        self.stop_btn = Gtk.Button(label="停止", css_classes=["destructive-action"])
         self.stop_btn.connect("clicked", self.on_stop)
         header.pack_end(self.stop_btn)
 
-        self.filter = Gtk.DropDown.new_from_strings(
-            ["全部", "场景", "视频", "网页"])
-        self.filter.connect("notify::selected", lambda *_: self.populate())
-        header.pack_start(self.filter)
+        self.panel_btn = Gtk.ToggleButton(icon_name="sidebar-show-symbolic",
+                                          tooltip_text="显示/隐藏属性面板")
+        self.panel_btn.connect("toggled",
+                               lambda b: self.split.set_show_sidebar(b.get_active()))
+        header.pack_end(self.panel_btn)
+        view.add_top_bar(header)
 
-        # 扩展没生效时给个明确提示，而不是让用户对着没反应的桌面发呆
         self.warn = Adw.Banner(
             title="GNOME 扩展还没被加载：请注销后重新登录一次，动态壁纸才会显示到桌面上",
-            revealed=not extension_loaded(),
-        )
+            revealed=not extension_loaded())
         self.warn.set_button_label("知道了")
-        toolbar.add_top_bar(self.warn)
+        view.add_top_bar(self.warn)
+
+        self.chips = Gtk.Box(spacing=6, margin_top=10, margin_bottom=4,
+                             margin_start=14, margin_end=14)
+        group = None
+        for label, key in (("全部", ""), ("场景", "scene"),
+                           ("视频", "video"), ("网页", "web")):
+            btn = Gtk.ToggleButton(label=label,
+                                   active=(key == ""), css_classes=["flat"])
+            btn.connect("toggled", self.on_filter_toggled, key)
+            self.chips.append(btn)
+            group = btn if group is None else group
+            if btn is not self.chips.get_first_child():
+                btn.set_group(group)
+        view.add_top_bar(self.chips)
 
         self.flow = Gtk.FlowBox(
             selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
             min_children_per_line=2, max_children_per_line=6,
-            row_spacing=10, column_spacing=10,
-            margin_top=14, margin_bottom=14, margin_start=14, margin_end=14,
-        )
+            row_spacing=12, column_spacing=12,
+            margin_top=10, margin_bottom=14, margin_start=14, margin_end=14)
         scroller = Gtk.ScrolledWindow(vexpand=True, hexpand=True)
         scroller.set_child(self.flow)
-        toolbar.set_content(scroller)
+        view.set_content(scroller)
 
         self.status = Gtk.Label(xalign=0, margin_start=14, margin_bottom=10,
                                 css_classes=["dim-label"])
-        toolbar.add_bottom_bar(self.status)
+        view.add_bottom_bar(self.status)
+        return view
 
-        self.reload()
+    def on_filter_toggled(self, btn, key):
+        if btn.get_active():
+            self.active_filter = key
+            self.populate()
 
-    # ---------- 数据加载 ----------
+    # ---------------------------------------------------------- 属性面板
+
+    def build_sidebar(self):
+        view = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+
+        self.sidebar_title = Adw.WindowTitle(title="未选择壁纸")
+        header.set_title_widget(self.sidebar_title)
+
+        apply_btn = Gtk.Button(label="应用", css_classes=["suggested-action"])
+        apply_btn.connect("clicked", lambda *_: self.apply(self.selected))
+        self.apply_btn = apply_btn
+        header.pack_end(apply_btn)
+        view.add_top_bar(header)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14,
+                      margin_top=14, margin_bottom=18,
+                      margin_start=14, margin_end=14)
+
+        self.preview = Gtk.Picture(can_shrink=True, height_request=170,
+                                   css_classes=["preview-frame"])
+        self.preview.set_content_fit(Gtk.ContentFit.COVER)
+        box.append(self.preview)
+
+        self.subtitle = Gtk.Label(xalign=0, wrap=True, css_classes=["card-badge"])
+        box.append(self.subtitle)
+
+        box.append(Gtk.Separator())
+
+        # ---- 壁纸属性（逐壁纸，放最前面：这才是属性面板的主角）----
+        self.props_header = self.section_title("壁纸属性")
+        box.append(self.props_header)
+        self.props_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.append(self.props_box)
+        self.props_hint = Gtk.Label(
+            label="选中壁纸后这里会列出它自己的可调项",
+            xalign=0, wrap=True, css_classes=["empty-hint", "card-badge"])
+        self.props_box.append(self.props_hint)
+
+        # ---- 播放设置（全局，收进折叠分组省空间）----
+        group = Adw.PreferencesGroup(margin_top=4)
+        self.settings_group = group
+        box.append(group)
+
+        self.settings_expander = Adw.ExpanderRow(
+            title="播放设置", subtitle="全局生效，对所有壁纸都一样")
+        group.add(self.settings_expander)
+
+        self.row_silent = self.switch_row("静音", "关闭壁纸产生的所有声音",
+                                          self.settings["silent"],
+                                          lambda v: self.set_global("silent", v))
+        self.settings_expander.add_row(self.row_silent)
+
+        self.row_volume = self.slider_row("音量", 0, 100, 1,
+                                          self.settings["volume"],
+                                          lambda v: self.set_global("volume", int(v)),
+                                          suffix="%")
+        self.settings_expander.add_row(self.row_volume)
+
+        self.row_fps = self.slider_row("帧率上限", 10, 144, 1,
+                                       self.settings["fps"],
+                                       lambda v: self.set_global("fps", int(v)),
+                                       suffix=" fps")
+        self.settings_expander.add_row(self.row_fps)
+
+        self.row_scaling = self.combo_row("缩放模式", SCALING_CHOICES,
+                                          self.settings["scaling"],
+                                          lambda v: self.set_global("scaling", v))
+        self.settings_expander.add_row(self.row_scaling)
+
+        self.row_particles = self.switch_row(
+            "粒子效果", "关闭可降低 GPU 占用",
+            self.settings["particles"],
+            lambda v: self.set_global("particles", v))
+        self.settings_expander.add_row(self.row_particles)
+
+        self.row_parallax = self.switch_row(
+            "视差效果", "跟随鼠标的景深位移",
+            self.settings["parallax"],
+            lambda v: self.set_global("parallax", v))
+        self.settings_expander.add_row(self.row_parallax)
+
+        self.row_mouse = self.switch_row(
+            "鼠标交互", "允许壁纸响应鼠标位置",
+            self.settings["mouse"],
+            lambda v: self.set_global("mouse", v))
+        self.settings_expander.add_row(self.row_mouse)
+
+        scroller = Gtk.ScrolledWindow(vexpand=True)
+        scroller.set_child(box)
+        view.set_content(scroller)
+        return view
+
+    def section_title(self, text):
+        return Gtk.Label(label=text, xalign=0, css_classes=["section-title"])
+
+    def switch_row(self, title, subtitle, value, on_change):
+        row = Adw.SwitchRow(title=title, subtitle=subtitle, active=bool(value))
+        row.connect("notify::active", lambda r, _p: on_change(r.get_active()))
+        return row
+
+    def slider_row(self, title, lo, hi, step, value, on_change, suffix=""):
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,
+                                         lo, hi, step)
+        scale.set_value(value)
+        scale.set_hexpand(True)
+        scale.set_draw_value(False)
+        label = Gtk.Label(label=f"{int(value)}{suffix}",
+                          width_chars=6, xalign=1)
+
+        def on_change_inner(sc):
+            val = sc.get_value()
+            label.set_text(f"{int(val)}{suffix}")
+            on_change(val)
+
+        scale.connect("value-changed", on_change_inner)
+        row = Adw.ActionRow(title=title)
+        row.add_suffix(scale)
+        row.add_suffix(label)
+        row._scale = scale
+        row._label = label
+        row._suffix = suffix
+        return row
+
+    def combo_row(self, title, choices, value, on_change):
+        labels = [label for _key, label in choices]
+        keys = [key for key, _label in choices]
+        dropdown = Gtk.DropDown.new_from_strings(labels)
+        if value in keys:
+            dropdown.set_selected(keys.index(value))
+        dropdown.set_valign(Gtk.Align.CENTER)
+        dropdown.connect(
+            "notify::selected",
+            lambda dd, _p: on_change(keys[dd.get_selected()]))
+        row = Adw.ActionRow(title=title)
+        row.add_suffix(dropdown)
+        return row
+
+    # ---------------------------------------------------------- 数据刷新
 
     def reload(self):
         self.wallpapers = scan_wallpapers()
         self.current_id = running_wallpaper_id()
         self.populate()
         self.update_status()
+        if self.selected is None and self.current_id:
+            match = next((w for w in self.wallpapers
+                          if w.wid == self.current_id), None)
+            if match:
+                self.select(match, apply_now=False)
 
     def populate(self):
         while (child := self.flow.get_first_child()) is not None:
@@ -250,87 +574,263 @@ class PickerWindow(Adw.ApplicationWindow):
         self.cards.clear()
 
         keyword = self.search.get_text().strip().lower()
-        want = ["", "scene", "video", "web"][self.filter.get_selected()]
+        want = getattr(self, "active_filter", "")
 
-        for w in self.wallpapers:
-            if want and w.wtype != want:
+        for wall in self.wallpapers:
+            if want and wall.wtype != want:
                 continue
-            if keyword and keyword not in w.title.lower() and keyword not in w.wid:
+            if keyword and keyword not in wall.title.lower() \
+                    and keyword not in wall.wid:
                 continue
-            card = self.make_card(w)
-            self.cards[w.wid] = card
+            card = self.make_card(wall)
+            self.cards[wall.wid] = card
             self.flow.append(card)
 
-    def make_card(self, w):
+    def make_card(self, wall):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
-                      css_classes=["card"])
-        if w.wid == self.current_id:
-            box.add_css_class("card-current")
+                      css_classes=["wallpaper-card"])
+        current = wall.wid == self.current_id
+        if current:
+            box.add_css_class("wallpaper-card-current")
 
-        picture = None
-        if w.preview:
+        picture = Gtk.Picture(can_shrink=True, css_classes=["thumb"])
+        picture.set_size_request(-1, int(THUMB * 0.60))
+        if wall.preview:
             try:
                 texture = Gdk.Texture.new_for_pixbuf(
-                    load_thumbnail(w.preview, THUMB))
-                picture = Gtk.Picture.new_for_paintable(texture)
+                    load_thumbnail(wall.preview, THUMB))
+                picture.set_paintable(texture)
             except Exception:
-                picture = None
-        if picture is None:
-            picture = Gtk.Picture()
-        picture.set_can_shrink(True)
-        picture.set_size_request(-1, int(THUMB * 0.62))
-        picture.add_css_class("thumb")
+                pass
         picture.set_content_fit(Gtk.ContentFit.COVER)
         box.append(picture)
 
-        title = Gtk.Label(label=w.title, lines=2,
-                          ellipsize=Pango.EllipsizeMode.END,
-                          wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
+        title = Gtk.Label(label=wall.title, lines=2,
+                          ellipsize=Pango.EllipsizeMode.END, wrap=True,
+                          wrap_mode=Pango.WrapMode.WORD_CHAR,
                           justify=Gtk.Justification.CENTER,
                           css_classes=["card-title"])
         box.append(title)
 
-        badge = Gtk.Label(
-            label=f"{TYPE_LABEL.get(w.wtype, w.wtype)} · {w.wid}",
-            css_classes=["card-badge"])
-        box.append(badge)
+        badge = "使用中 · " if current else ""
+        box.append(Gtk.Label(
+            label=f"{badge}{TYPE_LABEL.get(wall.wtype, wall.wtype)}",
+            css_classes=["card-badge"]))
 
         button = Gtk.Button(child=box, has_frame=False)
-        button.connect("clicked", lambda *_: self.apply(w))
-        button.set_tooltip_text(f"点击应用：{w.title}")
+        button.set_tooltip_text(f"点击应用：{wall.title}")
+        button.connect("clicked", lambda *_: self.select(wall, apply_now=True))
 
         child = Gtk.FlowBoxChild()
         child.set_child(button)
         return child
 
-    # ---------- 操作 ----------
+    def select(self, wall, apply_now):
+        if wall is None:
+            return
+        self.selected = wall
+        self.split.set_show_sidebar(True)
+        self.panel_btn.set_active(True)
+        self.sidebar_title.set_title(wall.title)
+        self.subtitle.set_text(
+            f"{TYPE_LABEL.get(wall.wtype, wall.wtype)} · {wall.wid}")
+        self.preview.set_paintable(None)
+        if wall.preview:
+            try:
+                self.preview.set_paintable(Gdk.Texture.new_for_pixbuf(
+                    load_thumbnail(wall.preview, 480)))
+            except Exception:
+                pass
+        self.apply_btn.set_sensitive(wall.wid != self.current_id)
+        self.apply_btn.set_label("使用中" if wall.wid == self.current_id else "应用")
+        self.load_properties(wall)
+        if apply_now:
+            self.apply(wall)
 
-    def apply(self, w):
-        result = subprocess.run([SCRIPT, w.wid], capture_output=True,
+    # ---------------------------------------------------------- 壁纸属性
+
+    def load_properties(self, wall):
+        """后台线程读属性，避免卡住界面。"""
+        self._props_token += 1
+        token = self._props_token
+
+        while (child := self.props_box.get_first_child()) is not None:
+            self.props_box.remove(child)
+        self.props_box.append(Gtk.Label(
+            label="正在读取该壁纸的可调项…", xalign=0,
+            css_classes=["empty-hint", "card-badge"]))
+        self.prop_rows = []
+
+        def worker():
+            props = fetch_properties(wall.wid)
+            GLib.idle_add(self.render_properties, wall.wid, props, token)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def render_properties(self, wid, props, token):
+        if token != self._props_token:
+            return False
+        while (child := self.props_box.get_first_child()) is not None:
+            self.props_box.remove(child)
+
+        if not props:
+            self.props_box.append(Gtk.Label(
+                label="这张壁纸没有可调项", xalign=0,
+                css_classes=["empty-hint", "card-badge"]))
+            self.props_header.set_text("壁纸属性")
+            return False
+
+        saved = self.settings["properties"].get(wid, {})
+
+        for spec in props:
+            name = spec["name"]
+            value = saved.get(name, spec["value"])
+            widget = None
+            if spec["type"] == "boolean":
+                widget = Adw.SwitchRow(
+                    title=spec["label"],
+                    active=str(value).strip() not in ("0", "false", "False", ""))
+                widget.connect(
+                    "notify::active",
+                    lambda r, _p, n=name: self.set_property(
+                        n, "1" if r.get_active() else "0"))
+            elif spec["type"] == "slider":
+                try:
+                    lo = float(spec["min"] or 0)
+                    hi = float(spec["max"] or 1)
+                    step = float(spec["step"] or 0.01)
+                except ValueError:
+                    lo, hi, step = 0.0, 1.0, 0.01
+                try:
+                    cur = float(value)
+                except ValueError:
+                    cur = lo
+                scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,
+                                                 lo, hi, step)
+                scale.set_value(cur)
+                scale.set_hexpand(True)
+                scale.set_draw_value(False)
+                readout = Gtk.Label(label=f"{cur:g}", width_chars=6, xalign=1)
+                scale.connect(
+                    "value-changed",
+                    lambda sc, n=name, lab=readout: (
+                        lab.set_text(f"{sc.get_value():g}"),
+                        self.set_property(n, f"{sc.get_value():g}")))
+                widget = Adw.ActionRow(title=spec["label"])
+                widget.add_suffix(scale)
+                widget.add_suffix(readout)
+            elif spec["type"] == "combo" and spec["options"]:
+                values = [opt[0] for opt in spec["options"]]
+                labels = [opt[1] for opt in spec["options"]]
+                dropdown = Gtk.DropDown.new_from_strings(labels)
+                if str(value) in values:
+                    dropdown.set_selected(values.index(str(value)))
+                dropdown.set_valign(Gtk.Align.CENTER)
+                dropdown.connect(
+                    "notify::selected",
+                    lambda dd, _p, n=name, vals=values:
+                        self.set_property(n, vals[dd.get_selected()]))
+                widget = Adw.ActionRow(title=spec["label"])
+                widget.add_suffix(dropdown)
+            elif spec["type"] == "color":
+                # 渲染器读写的格式是 "r, g, b, a" 四个 0-1 浮点数
+                rgba = Gdk.RGBA()
+                try:
+                    parts = [float(p) for p in str(value).split(",")[:4]]
+                    rgba.red, rgba.green, rgba.blue, rgba.alpha = parts
+                except ValueError:
+                    rgba.parse("#000000")
+                button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
+                button.set_rgba(rgba)
+                button.set_valign(Gtk.Align.CENTER)
+                button.connect(
+                    "notify::rgba",
+                    lambda btn, _p, n=name: self.set_property(
+                        n, "%.6f, %.6f, %.6f, %.6f" % (
+                            btn.get_rgba().red, btn.get_rgba().green,
+                            btn.get_rgba().blue, btn.get_rgba().alpha)))
+                widget = Adw.ActionRow(
+                    title="主题色" if name == "schemecolor" else spec["label"])
+                widget.add_suffix(button)
+
+            if widget is not None:
+                self.props_box.append(widget)
+                self.prop_rows.append(widget)
+
+        self.props_header.set_text(f"壁纸属性（{len(self.prop_rows)} 项）")
+        return False
+
+    # ---------------------------------------------------------- 设置变更
+
+    def set_global(self, key, value):
+        if self.settings.get(key) == value:
+            return
+        self.settings[key] = value
+        save_settings(self.settings)
+        self.schedule_reapply()
+
+    def set_property(self, name, value):
+        if self.selected is None:
+            return
+        store = self.settings["properties"].setdefault(self.selected.wid, {})
+        if store.get(name) == value:
+            return
+        store[name] = value
+        save_settings(self.settings)
+        self.schedule_reapply()
+
+    def schedule_reapply(self):
+        """设置改动后重新应用壁纸。
+
+        连续拖动滑块会触发很多次，所以做个防抖，避免把渲染器反复重启。
+        """
+        if self.current_id is None:
+            return
+        if self._reapply_source is not None:
+            GLib.source_remove(self._reapply_source)
+        self._reapply_source = GLib.timeout_add(700, self._do_reapply)
+
+    def _do_reapply(self):
+        self._reapply_source = None
+        target = next((w for w in self.wallpapers if w.wid == self.current_id),
+                      None)
+        if target is not None:
+            self.apply(target, quiet=True)
+        return False
+
+    # ---------------------------------------------------------- 操作
+
+    def apply(self, wall, quiet=False):
+        if wall is None:
+            return
+        result = subprocess.run([SCRIPT, wall.wid], capture_output=True,
                                 text=True, timeout=60)
         if result.returncode != 0:
             self.toast_overlay.add_toast(Adw.Toast(
-                title=f"启动失败：{result.stderr.strip()[:120] or '见 wallpaper.log'}"))
+                title=f"启动失败：{result.stderr.strip()[:120] or '见日志'}"))
             return
-        self.current_id = w.wid
-        self.write_autostart(w.wid)
+        self.current_id = wall.wid
+        self.write_autostart(wall.wid)
         self.populate()
         self.update_status()
-        self.toast_overlay.add_toast(Adw.Toast(title=f"已切换：{w.title}"))
+        self.apply_btn.set_sensitive(False)
+        self.apply_btn.set_label("使用中")
+        if not quiet:
+            self.toast_overlay.add_toast(Adw.Toast(title=f"已应用：{wall.title}"))
 
     def on_stop(self, _btn):
         subprocess.run([SCRIPT, "--stop"], capture_output=True, timeout=30)
         self.current_id = None
         self.populate()
         self.update_status()
+        self.apply_btn.set_sensitive(True)
         self.toast_overlay.add_toast(Adw.Toast(title="已停止动态壁纸"))
 
     def write_autostart(self, wid):
-        """把当前壁纸写成登录默认，下次进来还是它。"""
         try:
             os.makedirs(os.path.dirname(AUTOSTART), exist_ok=True)
-            with open(AUTOSTART, "w", encoding="utf-8") as f:
-                f.write(
+            with open(AUTOSTART, "w", encoding="utf-8") as fh:
+                fh.write(
                     "[Desktop Entry]\n"
                     "Type=Application\n"
                     "Name=Wallpaper Engine 动态壁纸\n"
@@ -347,43 +847,50 @@ class PickerWindow(Adw.ApplicationWindow):
         if self.current_id:
             title = next((w.title for w in self.wallpapers
                           if w.wid == self.current_id), self.current_id)
-            self.status.set_text(f"正在渲染：{title}　·　共 {total} 张壁纸")
+            self.status.set_text(f"正在使用：{title}　·　共 {total} 张壁纸")
             self.stop_btn.set_sensitive(True)
         else:
-            self.status.set_text(f"当前没有运行中的动态壁纸　·　共 {total} 张壁纸")
+            self.status.set_text(f"当前没有动态壁纸在运行　·　共 {total} 张壁纸")
             self.stop_btn.set_sensitive(False)
 
 
 class PickerApp(Adw.Application):
-    def __init__(self, snapshot_path=None):
+    def __init__(self, snapshot_path=None, preselect=None):
         super().__init__(application_id="io.github.fitz.WallpaperPicker",
                          flags=Gio.ApplicationFlags.NON_UNIQUE)
         self.snapshot_path = snapshot_path
+        self.preselect = preselect
 
     def do_activate(self):
-        window = self.props.active_window or PickerWindow(self)
-        window.present()
+        window = self.props.active_window or WallpaperPicker(self)
         if self.snapshot_path:
-            GLib.timeout_add(2000, self._snapshot, window)
+            # 开发截图时用更高的画布，方便一次看全整个面板
+            window.set_default_size(1280, 1400)
+        window.present()
+        if self.preselect:
+            match = next((w for w in window.wallpapers
+                          if w.wid == self.preselect), None)
+            if match is not None:
+                window.select(match, apply_now=False)
+        if self.snapshot_path:
+            GLib.timeout_add(2500, self._snapshot, window)
 
     def _snapshot(self, window):
-        """把窗口内容自己渲染成 PNG（用于开发自查，避免受系统截图权限限制）。"""
+        """把窗口内容自己渲染成 PNG（开发自查用，绕开系统截图权限限制）。"""
         try:
             paintable = Gtk.WidgetPaintable.new(window.get_content())
-            w = paintable.get_intrinsic_width()
-            h = paintable.get_intrinsic_height()
+            wide = paintable.get_intrinsic_width()
+            high = paintable.get_intrinsic_height()
             snapshot = Gtk.Snapshot.new()
-            # 先铺一层底色：get_content() 不含窗口自身背景，不铺的话
-            # 深色界面的浅色文字会落在透明底上，看着像一片空白
             bg = Gdk.RGBA()
             bg.red = bg.green = bg.blue = 0.14
             bg.alpha = 1.0
-            snapshot.append_color(bg, Graphene.Rect().init(0, 0, w, h))
-            paintable.snapshot(snapshot, w, h)
+            snapshot.append_color(bg, Graphene.Rect().init(0, 0, wide, high))
+            paintable.snapshot(snapshot, wide, high)
             renderer = window.get_native().get_renderer()
             texture = renderer.render_texture(snapshot.to_node(), None)
             texture.save_to_png(self.snapshot_path)
-            print(f"已保存界面截图: {self.snapshot_path} ({w}x{h})")
+            print(f"已保存界面截图: {self.snapshot_path} ({wide}x{high})")
         except Exception as exc:  # noqa: BLE001
             print(f"界面截图失败: {exc}")
         self.quit()
@@ -393,7 +900,12 @@ class PickerApp(Adw.Application):
 if __name__ == "__main__":
     shot = None
     if "--snapshot" in sys.argv:
-        i = sys.argv.index("--snapshot")
-        shot = sys.argv[i + 1]
-        del sys.argv[i:i + 2]
-    sys.exit(PickerApp(shot).run(sys.argv))
+        index = sys.argv.index("--snapshot")
+        shot = sys.argv[index + 1]
+        del sys.argv[index:index + 2]
+    select = None
+    if "--select" in sys.argv:
+        index = sys.argv.index("--select")
+        select = sys.argv[index + 1]
+        del sys.argv[index:index + 2]
+    sys.exit(PickerApp(shot, select).run(sys.argv))
