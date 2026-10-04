@@ -85,6 +85,10 @@ scaling = cfg.get('scaling')
 if scaling and scaling != 'default':
     flags += ['--scaling', str(scaling)]
 
+# 渲染器默认会在其他程序出声时自动静音壁纸；关掉这个行为要显式传参
+if cfg.get('automute') is False:
+    flags.append('--noautomute')
+
 for key, disabled in (('particles', '--disable-particles'),
                       ('parallax', '--disable-parallax'),
                       ('mouse', '--disable-mouse')):

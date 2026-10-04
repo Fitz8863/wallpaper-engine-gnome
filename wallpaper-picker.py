@@ -545,6 +545,15 @@ class WallpaperPicker(Adw.ApplicationWindow):
                                           lambda v: self.set_global("scaling", v))
         self.settings_expander.add_row(self.row_scaling)
 
+        # 对应官方 Performance > Playback 的
+        # 「Other application playing audio」从 Mute 改成 Keep running
+        self.row_automute = self.switch_row(
+            "其他程序出声时自动静音",
+            "关掉后，你听音乐或看视频时壁纸不会自动静音",
+            self.settings.get("automute", True),
+            lambda v: self.set_global("automute", v))
+        self.settings_expander.add_row(self.row_automute)
+
         self.row_particles = self.switch_row(
             "粒子效果", "关闭可降低 GPU 占用",
             self.settings["particles"],
@@ -1036,8 +1045,9 @@ class PickerApp(Adw.Application):
     def do_activate(self):
         window = self.props.active_window or WallpaperPicker(self)
         if self.snapshot_path:
-            # 开发截图时用更高的画布，方便一次看全整个面板
+            # 开发截图时用更高的画布、并展开折叠区，方便一次看全
             window.set_default_size(1280, 1400)
+            window.settings_expander.set_expanded(True)
         window.present()
         if self.preselect:
             match = next((w for w in window.wallpapers
