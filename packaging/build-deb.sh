@@ -1,0 +1,159 @@
+#!/bin/bash
+# 构建 Debian 安装包（只打包本项目自己这一层：界面 + 脚本 + GNOME 扩展）
+#
+# 用法:
+#   ./packaging/build-deb.sh            # 产物在 dist/
+#   ./packaging/build-deb.sh --install  # 构建后直接安装
+#
+# 为什么渲染器不打包进来：它必须从源码编译，构建时要下载 354MB 的 CEF，
+# 产物 1.5GB（光 libcef.so 就 1.3GB）。塞进 deb 会让包大到没人愿意下载，
+# 而且构建期联网抓文件违反 Debian 政策，官方归档不会收。
+# 渲染器由 install.sh 单独编译，见 README。
+
+set -eu
+
+PROJECT_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+PACKAGE="wallpaper-engine-gnome"
+# Debian 要求版本号以数字开头，所以没有 tag 时不能直接用提交哈希
+BASE_VERSION="1.0.0"
+if TAG="$(cd "$PROJECT_DIR" && git describe --tags --exact-match 2>/dev/null)"; then
+    VERSION="${TAG#v}"
+elif HASH="$(cd "$PROJECT_DIR" && git rev-parse --short HEAD 2>/dev/null)"; then
+    VERSION="${BASE_VERSION}+git$(date +%Y%m%d).${HASH}"
+else
+    VERSION="$BASE_VERSION"
+fi
+ARCH="all"
+# 发布前改成你的仓库地址（也可以用环境变量覆盖）
+HOMEPAGE="${HOMEPAGE:-https://github.com/YOUR-USERNAME/wallpaper-engine-gnome}"
+STAGE="$(mktemp -d)"
+OUT="$PROJECT_DIR/dist"
+INSTALL_AFTER="${1:-}"
+
+cleanup() { rm -rf "$STAGE"; }
+trap cleanup EXIT
+
+echo "==> 打包 $PACKAGE $VERSION ($ARCH)"
+PKG="$STAGE/${PACKAGE}_${VERSION}_${ARCH}"
+mkdir -p "$PKG/DEBIAN" "$PKG/usr/bin" "$PKG/usr/lib/$PACKAGE" \
+         "$PKG/usr/share/applications" \
+         "$PKG/usr/share/gnome-shell/extensions/linux-wallpaperengine@github.io" \
+         "$PKG/usr/share/doc/$PACKAGE"
+
+# ---- 程序本体 ----
+install -m 755 "$PROJECT_DIR/wallpaper-picker.py" "$PKG/usr/lib/$PACKAGE/"
+install -m 755 "$PROJECT_DIR/start-wallpaper.sh"  "$PKG/usr/lib/$PACKAGE/"
+
+# 命令行入口
+cat > "$PKG/usr/bin/wallpaper-picker" <<EOF
+#!/bin/sh
+exec /usr/bin/python3 /usr/lib/$PACKAGE/wallpaper-picker.py "\$@"
+EOF
+cat > "$PKG/usr/bin/wallpaper-engine-start" <<EOF
+#!/bin/sh
+exec /usr/lib/$PACKAGE/start-wallpaper.sh "\$@"
+EOF
+chmod 755 "$PKG/usr/bin/wallpaper-picker" "$PKG/usr/bin/wallpaper-engine-start"
+
+# ---- GNOME 扩展 ----
+install -m 644 "$PROJECT_DIR/gnome-extension/extension.js" \
+               "$PROJECT_DIR/gnome-extension/wallpaperManager.js" \
+               "$PROJECT_DIR/gnome-extension/metadata.json" \
+               "$PKG/usr/share/gnome-shell/extensions/linux-wallpaperengine@github.io/"
+
+# ---- 桌面入口 ----
+sed "s|@PROJECT_DIR@|/usr/lib/$PACKAGE|g" \
+    "$PROJECT_DIR/desktop/wallpaper-picker.desktop" \
+    > "$PKG/usr/share/applications/wallpaper-picker.desktop"
+chmod 644 "$PKG/usr/share/applications/wallpaper-picker.desktop"
+
+# ---- 文档 ----
+install -m 644 "$PROJECT_DIR/README.md" "$PKG/usr/share/doc/$PACKAGE/README.md"
+install -m 644 "$PROJECT_DIR/LICENSE"   "$PKG/usr/share/doc/$PACKAGE/copyright"
+gzip -9n -c "$PROJECT_DIR/README.md" > "$PKG/usr/share/doc/$PACKAGE/README.md.gz"
+chmod 644 "$PKG/usr/share/doc/$PACKAGE/README.md.gz"
+
+# ---- control ----
+SIZE="$(du -sk "$PKG" | cut -f1)"
+cat > "$PKG/DEBIAN/control" <<EOF
+Package: $PACKAGE
+Version: $VERSION
+Architecture: $ARCH
+Maintainer: Fitz <13725071087@163.com>
+Installed-Size: $SIZE
+Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0 (>= 4.10), gir1.2-adw-1,
+ gir1.2-graphene-1.0, gir1.2-gdkpixbuf-2.0, gir1.2-pango-1.0, bsdextrautils
+Recommends: gnome-shell (>= 45)
+Section: utils
+Priority: optional
+Homepage: $HOMEPAGE
+Description: Wallpaper Engine 动态壁纸的 GNOME Wayland 图形化选择器
+ 在 GNOME（Wayland 会话）上使用 Wallpaper Engine 创意工坊壁纸。
+ .
+ 包含 GTK4 图形化选择器、命令行启动器和配套 GNOME Shell 扩展。
+ 壁纸渲染依赖社区渲染器 linux-wallpaperengine 的 GNOME 分支，
+ 需另行编译安装（见 README），本包不包含它。
+EOF
+
+# ---- 安装后脚本：接上扩展 ----
+cat > "$PKG/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -e
+UUID="linux-wallpaperengine@github.io"
+
+# 把系统级扩展加入当前用户的启用列表
+if command -v gsettings >/dev/null 2>&1 && [ -n "${SUDO_USER:-}" ]; then
+    su "$SUDO_USER" -c "python3 - '$UUID' <<'PY'
+import ast, subprocess, sys
+uuid = sys.argv[1]
+cur = subprocess.run(['gsettings', 'get', 'org.gnome.shell', 'enabled-extensions'],
+                     capture_output=True, text=True).stdout.strip()
+try:
+    lst = ast.literal_eval(cur) if cur else []
+except Exception:
+    lst = []
+if uuid not in lst:
+    lst.append(uuid)
+    subprocess.run(['gsettings', 'set', 'org.gnome.shell', 'enabled-extensions',
+                    str(lst)], check=False)
+PY" || true
+fi
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q /usr/share/applications || true
+fi
+echo "安装完成。首次使用需要注销后重新登录一次，GNOME Shell 才会加载扩展。"
+EOF
+
+cat > "$PKG/DEBIAN/prerm" <<'EOF'
+#!/bin/sh
+set -e
+# 卸载时把扩展从启用列表里摘掉，免得留下无效条目
+if command -v gsettings >/dev/null 2>&1 && [ -n "${SUDO_USER:-}" ]; then
+    su "$SUDO_USER" -c "python3 - <<'PY'
+import ast, subprocess
+uuid = 'linux-wallpaperengine@github.io'
+cur = subprocess.run(['gsettings', 'get', 'org.gnome.shell', 'enabled-extensions'],
+                     capture_output=True, text=True).stdout.strip()
+try:
+    lst = [x for x in ast.literal_eval(cur) if x != uuid] if cur else []
+except Exception:
+    lst = []
+subprocess.run(['gsettings', 'set', 'org.gnome.shell', 'enabled-extensions',
+                str(lst)], check=False)
+PY" || true
+fi
+EOF
+
+chmod 755 "$PKG/DEBIAN/postinst" "$PKG/DEBIAN/prerm"
+
+# ---- 打包 ----
+mkdir -p "$OUT"
+DEB="$OUT/${PACKAGE}_${VERSION}_${ARCH}.deb"
+dpkg-deb --root-owner-group --build "$PKG" "$DEB" >/dev/null
+echo "==> 产物: $DEB ($(du -h "$DEB" | cut -f1))"
+
+if [ "$INSTALL_AFTER" = "--install" ]; then
+    echo "==> 安装"
+    sudo dpkg -i "$DEB" || sudo apt-get install -f -y
+fi

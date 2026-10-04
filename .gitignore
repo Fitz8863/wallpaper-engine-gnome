@@ -17,3 +17,6 @@ cef/
 # 打包与测试产物
 *.AppImage
 squashfs-root/
+
+# 打包产物
+dist/
