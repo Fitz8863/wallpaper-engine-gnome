@@ -50,8 +50,8 @@ APT_PACKAGES=(
     extra-cmake-modules ninja-build
     # 选择器界面
     python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-graphene-1.0
-    # 其他
-    bsdmainutils
+    # 其他（column 命令用于对齐 --list 的输出）
+    bsdextrautils
 )
 
 install_deps() {

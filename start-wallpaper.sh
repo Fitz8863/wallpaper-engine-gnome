@@ -123,7 +123,11 @@ PY
 case "${1:-}" in
     --list)
         refresh_list >&2
-        column -t -s $'\t' "$LIST"
+        if command -v column >/dev/null 2>&1; then
+            column -t -s $'\t' "$LIST"
+        else
+            cat "$LIST"   # 没有 column 就直接输出，不强求对齐
+        fi
         exit 0
         ;;
     --stop)
