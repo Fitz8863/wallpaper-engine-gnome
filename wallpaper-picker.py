@@ -1156,6 +1156,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
         def done(_result):
             self.set_busy(False)
             self.current_id = None
+            self.remove_autostart()
             self.update_highlight()
             self.update_status()
             self.apply_btn.set_sensitive(True)
@@ -1164,6 +1165,16 @@ class WallpaperPicker(Adw.ApplicationWindow):
             return False
 
         self.run_script_async(["--stop"], done)
+
+    def remove_autostart(self):
+        """停止即撤掉登录自启——用户明确要停，重启后壁纸不该自己回来。
+
+        下次选壁纸时 write_autostart 会重建。文件不存在不算错误。
+        """
+        try:
+            os.remove(AUTOSTART)
+        except OSError:
+            pass
 
     def write_autostart(self, wid):
         try:

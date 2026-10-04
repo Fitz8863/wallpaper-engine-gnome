@@ -135,7 +135,14 @@ case "${1:-}" in
         # pidfile 可能过期，再按进程名兜一次
         pkill -f "linux-wallpaperengine.*--gnome" 2>/dev/null && stopped=1
         rm -f "$PIDFILE"
-        [ "$stopped" = 1 ] && echo "已停止壁纸" || echo "没有正在运行的壁纸"
+        if [ "$stopped" = 1 ]; then
+            # 停止即撤掉登录自启，与图形界面的「停止」按钮行为一致——
+            # 用户明确要停，重启后壁纸不该自己回来。再选壁纸时会重建。
+            rm -f "$HOME/.config/autostart/wallpaper-engine.desktop"
+            echo "已停止壁纸"
+        else
+            echo "没有正在运行的壁纸"
+        fi
         exit 0
         ;;
     --status)
@@ -164,7 +171,8 @@ if [[ "$ARG" =~ ^[0-9]+$ ]]; then
     BG="$ARG"
 else
     refresh_list >&2
-    BG="$(grep -i -- "$ARG" "$LIST" | head -1 | cut -f1)"
+    # -F 按字面匹配：标题里常带 [4K] (汉化) 这类括号，当正则解释必错
+    BG="$(grep -iF -- "$ARG" "$LIST" | head -1 | cut -f1)"
     if [ -z "$BG" ]; then
         echo "没找到匹配 '$ARG' 的壁纸，用 --list 看看有哪些" >&2
         exit 1
