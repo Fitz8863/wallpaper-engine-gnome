@@ -15,6 +15,7 @@
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -219,11 +220,33 @@ def extension_loaded():
 
 # --------------------------------------------------- 渲染器属性列表解析
 
+# 这些是 Wallpaper Engine 的界面元数据，不是绘制参数，改了对画面没有任何影响。
+# 实测方法：同一张壁纸渲染两次、只改这一个属性，逐像素比对 ——
+#   schemecolor 改亮红  → 差异 0.06%（仅动画时间差，等于无影响）
+#   pbrcolor    改亮红  → 差异 3%
+#   clouds 开关         → 差异 17%
+# 所以只排除 schemecolor（它决定创意工坊详情页的强调色），颜色类控件本身保留。
+SKIP_PROPERTIES = {"schemecolor"}
+
+
 def clean_label(text, fallback):
-    """属性的 Text 字段有时是整段 HTML 或 i18n 键名，不适合直接当标题。"""
+    """把属性的 Text 字段变成能看的标题。
+
+    作者写标签的方式五花八门，实测遇到过三种：
+      "Clouds"                          直接用
+      "ui_browse_properties_scheme_color"  i18n 键名，用属性名兜底
+      "<p>颜色<br>color"                   HTML，剥掉标签后是有效标题
+    """
     text = (text or "").strip()
-    if not text or "<" in text or text.startswith("ui_"):
+    if not text or text.startswith("ui_"):
         return fallback
+    if "<" in text:
+        plain = re.sub(r"<[^>]+>", " ", text)
+        plain = re.sub(r"\s+", " ", plain).strip()
+        # 太长的多半是整段说明或广告，不适合当标题
+        if not plain or len(plain) > 40:
+            return fallback
+        return plain
     return text
 
 
@@ -277,13 +300,18 @@ def parse_properties(raw):
         name, sep, ptype = line.partition(" - ")
         if not sep:
             continue
+        name = name.strip()
+        if name in SKIP_PROPERTIES:
+            # 同样要清空 cur，理由见上面那条注释
+            cur = None
+            continue
         ptype = ptype.strip()
         if ptype not in ("boolean", "slider", "combo", "color"):
             # 跳过的类型必须清空 cur，否则它后续缩进的 Text/Value 行
             # 会被错误地算到上一个属性头上
             cur = None
             continue
-        cur = {"name": name.strip(), "type": ptype, "label": name.strip(),
+        cur = {"name": name, "type": ptype, "label": name,
                "value": "", "min": None, "max": None, "step": None,
                "options": []}
         props.append(cur)
@@ -770,8 +798,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
                         n, "%.6f, %.6f, %.6f, %.6f" % (
                             btn.get_rgba().red, btn.get_rgba().green,
                             btn.get_rgba().blue, btn.get_rgba().alpha)))
-                widget = Adw.ActionRow(
-                    title="主题色" if name == "schemecolor" else spec["label"])
+                widget = Adw.ActionRow(title=spec["label"])
                 widget.add_suffix(button)
 
             if widget is not None:
