@@ -223,26 +223,40 @@ python3 lwe_paths.py screen      # 只打印探测到的主显示器
 ## 当前状态与待办
 
 **已完成并验证**：图形界面（网格/搜索/筛选/属性面板/播放设置）、
-路径与显示器自动探测、deb 打包（含安装/升级/卸载全流程）、
-v1.0.0 已发布（Release 带 deb 附件）。
+路径与显示器自动探测、deb 打包（含安装/升级/卸载全流程）、v1.0.0 已发布。
+另有后续三项已实现（见下方提交历史）。
+
+**设置的分层**（与官方对齐后的结构）：
+
+| 层 | 内容 | 存储 |
+|---|---|---|
+| 全局 | 静音、帧率上限、缩放模式、自动静音、粒子/视差/鼠标 | `settings.json` 顶层 |
+| 逐壁纸（我们的） | **音量** | `settings.json` 的 `volumes{壁纸ID: 值}` |
+| 逐壁纸（作者定义） | 壁纸自己的可调项 | `settings.json` 的 `properties{壁纸ID: {...}}` |
+
+音量之所以是逐壁纸的，是因为官方 Wallpaper Engine 就这么做（每张壁纸记住自己的
+音量，静音则分全局/逐显示器/托盘三层）。`volume_default` 只作为没单独设过时的
+兜底值。改这块时注意 `start-wallpaper.sh` 的 `build_flags()` 要同时兼容三种形态：
+`volumes[wid]` / `volume_default` / 旧格式的全局 `volume`。
 
 **待办，按价值排序**：
 
-1. **逐壁纸音量**——官方 Wallpaper Engine 的音量是逐壁纸的，我们目前是全局。
-   改动涉及 `settings.json` 结构（`volume` 要和 `properties` 一样按壁纸 ID 分桶）
-   和 `build_flags()` 的翻译逻辑。注意向后兼容：旧的全局 `volume` 要能继续读。
-2. **暴露 automute 开关**——渲染器有 `--noautomute`，对应官方
-   `Performance > Playback` 里 `Other application playing audio` 从 `Mute` 改成
-   `Keep running`。界面上还没这个开关，加进「播放设置」即可。
-3. **视频壁纸的帧率提示**——帧率上限对视频类壁纸无效（视频帧率由文件决定，
-   见官方文档 `help.wallpaperengine.io/en/performance/gpu.html`），
-   但界面上没有说明，用户会困惑。选中视频类壁纸时在帧率滑条旁加个提示。
-4. **多显示器**——目前只输出到 `LWE_SCREEN` 指定的单块屏。渲染器本身支持
+1. **多显示器**——目前只输出到 `LWE_SCREEN` 指定的单块屏。渲染器本身支持
    `--screen-root` 重复指定多块屏，理论上可以扩展。
-5. **播放列表界面**——渲染器支持 `--playlist`（读 Wallpaper Engine 的
+2. **播放列表界面**——渲染器支持 `--playlist`（读 Wallpaper Engine 的
    `config.json`），界面还没有入口。
-6. **修扩展的 `already disposed` 告警**——在 `gnome-extension/wallpaperManager.js`，
+3. **修扩展的 `already disposed` 告警**——在 `gnome-extension/wallpaperManager.js`，
    属于能力范围内的清理工作。
+4. **逐显示器保存壁纸属性**——官方支持（"Properties are now saved per-monitor too"），
+   我们目前不分显示器。
+
+### 已完成的后续改动
+
+| 提交 | 内容 |
+|---|---|
+| `114660d` | 音量改为逐壁纸；顺带修了「编辑非当前壁纸会打断运行中的壁纸」 |
+| `7cb26e0` | 暴露自动静音开关（对应渲染器的 `--noautomute`） |
+| `979a1f4` | 帧率上限的说明跟着壁纸类型变（视频/场景/网页效果不同） |
 
 ## 发布流程
 
