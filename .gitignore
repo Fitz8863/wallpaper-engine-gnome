@@ -2,6 +2,9 @@
 __pycache__/
 *.py[cod]
 
+# ZCode CLI 工作目录
+.zcode/
+
 # 运行时产物
 # 正常情况下这些会写到 ~/.cache/wallpaper-picker/，这里兜底防止误提交
 wallpapers.txt

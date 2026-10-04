@@ -1015,7 +1015,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
         """侧栏副标题带上素材原始分辨率。
 
         首次探测视频要走 GStreamer 初始化（约几百毫秒），放后台线程，
-        完成后回主线程补上；快速连点用 token 防串台。
+        完成后回主线程补上；快速连点用 token 防串台。探测期间先显示
+        不带分辨率的版本，免得副标题停留在上一张壁纸的文字上。
         """
         def text(res):
             parts = [TYPE_LABEL.get(wall.wtype, wall.wtype), wall.wid]
@@ -1026,6 +1027,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if wall.wid in _RES_CACHE:
             text(_RES_CACHE[wall.wid])
             return
+        text(None)
         self._res_token += 1
         token = self._res_token
 
@@ -1261,7 +1263,10 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self._save_source = GLib.timeout_add(400, self._flush_save)
 
     def _flush_save(self, *_args):
-        self._save_source = None
+        # 直接调用时也可能有挂着的防抖定时器（apply 落盘路径），一并撤掉
+        if self._save_source is not None:
+            GLib.source_remove(self._save_source)
+            self._save_source = None
         try:
             save_settings(self.settings)
         except Exception:
@@ -1351,8 +1356,14 @@ class WallpaperPicker(Adw.ApplicationWindow):
     def on_stop(self, _btn):
         self.set_busy(True, "正在停止 …")
 
-        def done(_result):
+        def done(result):
             self.set_busy(False)
+            if result.returncode != 0:
+                detail = (result.stderr or "").strip().splitlines()
+                self.toast_overlay.add_toast(Adw.Toast(
+                    title=f"停止失败：{detail[-1][:100] if detail else '见日志'}"))
+                self.update_status()
+                return False
             self.current_id = None
             self.remove_autostart()
             self.update_highlight()
