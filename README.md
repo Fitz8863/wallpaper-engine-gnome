@@ -128,6 +128,12 @@ export PROJECT="$HOME/apps/wallpaper-engine-gnome"   # 改成你的实际路径
 
 **首次安装后需要注销并重新登录一次**——Wayland 下 GNOME Shell 无法热加载新扩展。
 
+> **把项目目录挪了位置？** 重新跑一次 `./install.sh --desktop`。
+> `.desktop` 里存的是绝对路径，挪目录后旧路径就失效了。另外 GNOME Shell 会缓存
+> `.desktop` 的内容，**原地改写不一定能让缓存刷新**——症状是点图标毫无反应，
+> 日志里报旧路径不存在。所以安装脚本改成「先删再建」来触发目录级事件；
+> 你要是手动改这个文件，改完注销重登最保险。
+
 ### 关于渲染器和 CEF
 
 渲染器默认编译到 `~/linux-wallpaperengine`，用 `RENDERER_DIR` 可以改：

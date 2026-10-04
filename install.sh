@@ -158,11 +158,16 @@ install_desktop() {
     info "安装应用入口"
     mkdir -p "$APPS_DIR"
 
+    # 先删再建，而不是原地覆盖。
+    # GNOME Shell 会缓存 .desktop 的内容，原地改写不一定能让它的缓存失效
+    # （表现为点了图标没反应，日志里报旧路径不存在）。删除+新建会产生
+    # 目录级的文件系统事件，缓存才会刷新。
+    local target="$APPS_DIR/wallpaper-picker.desktop"
+    rm -f "$target"
     sed "s|@PROJECT_DIR@|$PROJECT_DIR|g" \
-        "$PROJECT_DIR/desktop/wallpaper-picker.desktop" \
-        > "$APPS_DIR/wallpaper-picker.desktop"
-    chmod +x "$APPS_DIR/wallpaper-picker.desktop"
-    ok "已安装: $APPS_DIR/wallpaper-picker.desktop"
+        "$PROJECT_DIR/desktop/wallpaper-picker.desktop" > "$target"
+    chmod +x "$target"
+    ok "已安装: $target"
 
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "$APPS_DIR" 2>/dev/null || true
