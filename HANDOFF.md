@@ -32,6 +32,7 @@ packaging/
 gnome-extension/        配套 GNOME Shell 扩展（GPL-3.0 第三方代码，见其 README）
 desktop/                桌面入口模板，用 @PROJECT_DIR@ 占位，安装时替换
 icons/                  应用图标：generate.py 一键再生成 SVG 与各尺寸 PNG
+patches/                渲染器本地补丁，install.sh 编译前自动应用
 ```
 
 ## 架构与数据流
@@ -165,6 +166,16 @@ GNOME Shell 会缓存 `.desktop` 的内容，而**原地改写文件不一定能
 而 shell 异常终止可能带走其他进程。用方括号技巧避开：
 `pkill -f "[w]allpaper-picker.py"`。注意 `grep -F` 不支持这个技巧（按字面匹配）。
 
+**Mutter 会把 gnome 模式的渲染窗口约束在工作区内，导致壁纸整体发虚**
+Wayland 普通窗口不允许盖住 Dock/顶栏，实测 2560x1600 屏上 configure 只给
+2464x1546——渲染器老实按这个尺寸建 EGL 表面，扩展克隆拉伸回 2560x1600，
+全屏壁纸被整体重采样，素材再高清也没用。修复：渲染器在 `setupXdgWindow()`
+里对目标输出调 `xdg_toplevel_set_fullscreen()`，全屏态的 configure 才给出
+完整显示器尺寸。补丁在 `patches/0001-*.patch`，`install.sh --renderer` 编译前
+自动应用（已应用/不适配则跳过）。排查窗口尺寸用
+`WAYLAND_DEBUG=client ./start-wallpaper.sh <ID>` 抓 Wayland 协议日志，
+看 `xdg_toplevel.configure` 的数值——Release 版没有 debug 日志开关，这是唯一入口。
+
 ### 构建
 
 **CEF 下载断流**
@@ -282,6 +293,7 @@ python3 lwe_paths.py screen      # 只打印探测到的主显示器
 | `1214d10` | 扫描逻辑抽成 `lwe_scan.py`，界面与命令行共用一份实现 |
 | `6c91031` | 界面性能专项：缩略图双层缓存+异步解码（内存 Texture + `thumbs/` 磁盘层）、属性面板按壁纸 ID 缓存、设置写盘 400ms 防抖、启动先 present 再填数据 |
 | `6827173` | 名称匹配改字面比较（`[4K]` 这类括号不再被当正则）；停止壁纸时撤掉登录自启（界面与 CLI 一致） |
+| `e021645` | 渲染器补丁：gnome 模式申请全屏态，configure 从 2464x1546 恢复为 2560x1600，消除克隆拉伸导致的整体发虚（详见「系统集成」踩坑条目） |
 
 ## 发布流程
 
@@ -308,7 +320,8 @@ gh release upload v1.0.0 dist/*.deb --repo <owner>/<repo> --clobber
 
 - 系统：Ubuntu 24.04 + GNOME Shell 46 + **Wayland** + NVIDIA RTX 4060（独显模式）
 - 项目目录：`~/projects/wallpaper`
-- 渲染器源码与构建产物：`~/linux-wallpaperengine`（外部依赖，**不要在这里改代码**）
+- 渲染器源码与构建产物：`~/linux-wallpaperengine`（外部依赖；本地补丁
+  `patches/0001-*.patch` 由 install.sh 自动应用，其余改动仍需先讨论）
 - 运行时状态：`~/.cache/wallpaper-picker/`（壁纸清单、日志、pid、settings.json、缩略图缓存 thumbs/）
 - Steam 库：`~/.steam/debian-installation`，42 张壁纸
   （26 场景 + 12 视频 + 3 网页 + 1 无法解析）
