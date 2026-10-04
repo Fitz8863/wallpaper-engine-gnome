@@ -316,6 +316,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.selected = None
         self.cards = {}
         self.prop_rows = []
+        self.switching = False
         self._reapply_source = None
         self._props_token = 0
 
@@ -364,6 +365,11 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.panel_btn.connect("toggled",
                                lambda b: self.split.set_show_sidebar(b.get_active()))
         header.pack_end(self.panel_btn)
+
+        # 切换壁纸需要一两秒（要停掉旧渲染器再起新的），期间转个圈给个交代
+        self.spinner = Gtk.Spinner(tooltip_text="正在切换壁纸…")
+        self.spinner.set_visible(False)
+        header.pack_end(self.spinner)
         view.add_top_bar(header)
 
         self.warn = Adw.Banner(
@@ -570,9 +576,30 @@ class WallpaperPicker(Adw.ApplicationWindow):
             if keyword and keyword not in wall.title.lower() \
                     and keyword not in wall.wid:
                 continue
-            card = self.make_card(wall)
-            self.cards[wall.wid] = card
-            self.flow.append(card)
+            self.flow.append(self.make_card(wall))
+
+    def update_highlight(self):
+        """只更新「哪张在用」的高亮，不重建网格。
+
+        切换壁纸后如果重建整个网格，滚动条会跳回顶部——用户想再换一张
+        就得重新往下翻。所以这里原地改样式。
+        """
+        for wid, widgets in self.cards.items():
+            is_current = wid == self.current_id
+            box, badge = widgets["box"], widgets["badge"]
+            has_class = box.has_css_class("wallpaper-card-current")
+            if is_current and not has_class:
+                box.add_css_class("wallpaper-card-current")
+            elif not is_current and has_class:
+                box.remove_css_class("wallpaper-card-current")
+            badge.set_text(self.badge_text(wid))
+
+    def badge_text(self, wid):
+        wall = next((w for w in self.wallpapers if w.wid == wid), None)
+        if wall is None:
+            return ""
+        prefix = "使用中 · " if wid == self.current_id else ""
+        return f"{prefix}{TYPE_LABEL.get(wall.wtype, wall.wtype)}"
 
     def make_card(self, wall):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
@@ -600,10 +627,11 @@ class WallpaperPicker(Adw.ApplicationWindow):
                           css_classes=["card-title"])
         box.append(title)
 
-        badge = "使用中 · " if current else ""
-        box.append(Gtk.Label(
-            label=f"{badge}{TYPE_LABEL.get(wall.wtype, wall.wtype)}",
-            css_classes=["card-badge"]))
+        # 固定字符宽度：角标在「场景」和「使用中 · 场景」之间切换时长度会变，
+        # 而网格是等宽的，一旦撑动布局就会把滚动位置挤走
+        badge = Gtk.Label(css_classes=["card-badge"], width_chars=12,
+                          ellipsize=Pango.EllipsizeMode.END, xalign=0.5)
+        box.append(badge)
 
         button = Gtk.Button(child=box, has_frame=False)
         button.set_tooltip_text(f"点击应用：{wall.title}")
@@ -611,6 +639,10 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
         child = Gtk.FlowBoxChild()
         child.set_child(button)
+
+        # 记下需要在高亮更新时改动的控件，避免重建整个网格
+        self.cards[wall.wid] = {"child": child, "box": box, "badge": badge}
+        badge.set_text(self.badge_text(wall.wid))
         return child
 
     def select(self, wall, apply_now):
@@ -629,8 +661,9 @@ class WallpaperPicker(Adw.ApplicationWindow):
                     load_thumbnail(wall.preview, 480)))
             except Exception:
                 pass
-        self.apply_btn.set_sensitive(wall.wid != self.current_id)
         self.apply_btn.set_label("使用中" if wall.wid == self.current_id else "应用")
+        if not self.switching:
+            self.apply_btn.set_sensitive(wall.wid != self.current_id)
         self.load_properties(wall)
         if apply_now:
             self.apply(wall)
@@ -788,31 +821,73 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
     # ---------------------------------------------------------- 操作
 
+    def run_script_async(self, args, callback):
+        """后台跑 start-wallpaper.sh，别阻塞界面。
+
+        以前是同步 subprocess.run，切换壁纸时整个窗口会卡住好几秒。
+        """
+        def worker():
+            try:
+                result = subprocess.run([SCRIPT] + args, capture_output=True,
+                                        text=True, timeout=120)
+            except Exception as exc:  # noqa: BLE001
+                result = subprocess.CompletedProcess(args, 1, "", str(exc))
+            GLib.idle_add(callback, result)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def set_busy(self, busy, text=""):
+        self.switching = busy
+        for widget in (self.stop_btn, self.panel_btn):
+            widget.set_sensitive(not busy)
+        if busy:
+            self.spinner.start()
+            self.spinner.set_visible(True)
+            if text:
+                self.status.set_text(text)
+            self.apply_btn.set_sensitive(False)
+        else:
+            self.spinner.stop()
+            self.spinner.set_visible(False)
+
     def apply(self, wall, quiet=False):
-        if wall is None:
+        if wall is None or getattr(self, "switching", False):
             return
-        result = subprocess.run([SCRIPT, wall.wid], capture_output=True,
-                                text=True, timeout=60)
-        if result.returncode != 0:
-            self.toast_overlay.add_toast(Adw.Toast(
-                title=f"启动失败：{result.stderr.strip()[:120] or '见日志'}"))
-            return
-        self.current_id = wall.wid
-        self.write_autostart(wall.wid)
-        self.populate()
-        self.update_status()
-        self.apply_btn.set_sensitive(False)
-        self.apply_btn.set_label("使用中")
-        if not quiet:
-            self.toast_overlay.add_toast(Adw.Toast(title=f"已应用：{wall.title}"))
+        self.set_busy(True, f"正在切换：{wall.title} …")
+
+        def done(result):
+            self.set_busy(False)
+            if result.returncode != 0:
+                detail = (result.stderr or "").strip().splitlines()
+                self.toast_overlay.add_toast(Adw.Toast(
+                    title=f"启动失败：{detail[-1][:100] if detail else '见日志'}"))
+                self.update_status()
+                return False
+            self.current_id = wall.wid
+            self.write_autostart(wall.wid)
+            self.update_highlight()      # 原地更新，不重建网格（否则滚动条跳顶）
+            self.update_status()
+            self.apply_btn.set_sensitive(False)
+            self.apply_btn.set_label("使用中")
+            if not quiet:
+                self.toast_overlay.add_toast(Adw.Toast(title=f"已应用：{wall.title}"))
+            return False
+
+        self.run_script_async([wall.wid], done)
 
     def on_stop(self, _btn):
-        subprocess.run([SCRIPT, "--stop"], capture_output=True, timeout=30)
-        self.current_id = None
-        self.populate()
-        self.update_status()
-        self.apply_btn.set_sensitive(True)
-        self.toast_overlay.add_toast(Adw.Toast(title="已停止动态壁纸"))
+        self.set_busy(True, "正在停止 …")
+
+        def done(_result):
+            self.set_busy(False)
+            self.current_id = None
+            self.update_highlight()
+            self.update_status()
+            self.apply_btn.set_sensitive(True)
+            self.apply_btn.set_label("应用")
+            self.toast_overlay.add_toast(Adw.Toast(title="已停止动态壁纸"))
+            return False
+
+        self.run_script_async(["--stop"], done)
 
     def write_autostart(self, wid):
         try:
@@ -839,7 +914,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
             self.stop_btn.set_sensitive(True)
         else:
             self.status.set_text(f"当前没有动态壁纸在运行　·　共 {total} 张壁纸")
-            self.stop_btn.set_sensitive(False)
+            # 正在切换时别把「停止」重新启用，否则状态文案会被覆盖
+            self.stop_btn.set_sensitive(not self.switching)
 
 
 class PickerApp(Adw.Application):

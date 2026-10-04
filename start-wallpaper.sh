@@ -179,8 +179,13 @@ else
     echo "匹配到: $(grep -- "$BG" "$LIST" | cut -f3)"
 fi
 
-# 先停掉旧实例
-pkill -f "linux-wallpaperengine.*--gnome" 2>/dev/null && sleep 1
+# 先停掉旧实例。轮询等它真的退出（通常几十毫秒），而不是固定 sleep 1——
+# 固定等待会让切换壁纸白等一秒，图形界面调用时尤其明显。
+pkill -f "linux-wallpaperengine.*--gnome" 2>/dev/null
+for _ in $(seq 1 20); do
+    pgrep -f "linux-wallpaperengine.*--gnome" >/dev/null 2>&1 || break
+    sleep 0.05
+done
 
 # 从设置文件生成参数；命令行透传的参数放最后，可以覆盖设置里的值
 mapfile -t FLAGS < <(build_flags "$BG")
@@ -194,9 +199,21 @@ nohup "$BIN" \
     > "$LOG" 2>&1 &
 
 echo $! > "$PIDFILE"
-sleep 3
 
-if kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+# 轮询确认进程活着。只要熬过 STARTUP_GRACE 就算启动成功，
+# 期间进程死掉则立刻报错——比原来的固定 sleep 3 快得多。
+STARTUP_GRACE=6   # 单位 0.1 秒，即 0.6 秒
+alive=0
+for _ in $(seq 1 "$STARTUP_GRACE"); do
+    sleep 0.1
+    if ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        alive=-1
+        break
+    fi
+    alive=1
+done
+
+if [ "$alive" = 1 ]; then
     echo "壁纸已启动 (PID $(cat "$PIDFILE")，显示器 $SCREEN)"
     echo "日志: $LOG"
 else
