@@ -51,6 +51,7 @@ THUMB_DIR = os.path.join(STATE_DIR, "thumbs")
 sys.path.insert(0, ROOT)
 from lwe_paths import find_renderer, find_workshop  # noqa: E402
 from lwe_scan import scan_workshop  # noqa: E402
+from tray import TrayIcon  # noqa: E402
 
 RENDERER = find_renderer()
 
@@ -627,6 +628,37 @@ class WallpaperPicker(Adw.ApplicationWindow):
         # present() 之前的阻塞从几百毫秒降到几乎为零
         self.status.set_text("正在扫描壁纸…")
         GLib.idle_add(self.reload)
+
+        self.tray = None
+        self._tray_hint_shown = False
+        self.connect("close-request", self._on_close_request)
+
+    def init_tray(self):
+        """顶栏托盘图标（StatusNotifierItem）。创建即注册，不阻塞。"""
+        self.tray = TrayIcon(
+            on_open=lambda: self._tray_open(),
+            on_stop=self.stop_wallpaper,
+            on_quit=lambda: self.get_application().quit())
+        self.tray.start()
+
+    def _tray_open(self):
+        self.present()
+
+    def _on_close_request(self, *args):
+        # 托盘可用时点 ✕ 是隐藏到托盘，真正退出走托盘菜单的「退出」
+        if self.tray is not None and self.tray.available:
+            self.hide()
+            if not self._tray_hint_shown:
+                self._tray_hint_shown = True
+                try:
+                    app = self.get_application()
+                    note = Gio.Notification.new("壁纸选择器已最小化到托盘")
+                    note.set_body("点击顶栏图标可以随时打开或停止动态壁纸")
+                    app.send_notification("tray-hint", note)
+                except Exception:
+                    pass
+            return True
+        return False
 
     # ---------------------------------------------------------- 主区域
 
@@ -1354,26 +1386,29 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.run_script_async([wall.wid], done)
 
     def on_stop(self, _btn):
+        self.stop_wallpaper()
+
+    def stop_wallpaper(self):
+        """停止动态壁纸。「停止」按钮与托盘菜单共用。"""
         self.set_busy(True, "正在停止 …")
+        self.run_script_async(["--stop"], self._after_stop)
 
-        def done(result):
-            self.set_busy(False)
-            if result.returncode != 0:
-                detail = (result.stderr or "").strip().splitlines()
-                self.toast_overlay.add_toast(Adw.Toast(
-                    title=f"停止失败：{detail[-1][:100] if detail else '见日志'}"))
-                self.update_status()
-                return False
-            self.current_id = None
-            self.remove_autostart()
-            self.update_highlight()
+    def _after_stop(self, result):
+        self.set_busy(False)
+        if result.returncode != 0:
+            detail = (result.stderr or "").strip().splitlines()
+            self.toast_overlay.add_toast(Adw.Toast(
+                title=f"停止失败：{detail[-1][:100] if detail else '见日志'}"))
             self.update_status()
-            self.apply_btn.set_sensitive(True)
-            self.apply_btn.set_label("应用")
-            self.toast_overlay.add_toast(Adw.Toast(title="已停止动态壁纸"))
             return False
-
-        self.run_script_async(["--stop"], done)
+        self.current_id = None
+        self.remove_autostart()
+        self.update_highlight()
+        self.update_status()
+        self.apply_btn.set_sensitive(True)
+        self.apply_btn.set_label("应用")
+        self.toast_overlay.add_toast(Adw.Toast(title="已停止动态壁纸"))
+        return False
 
     def remove_autostart(self):
         """停止即撤掉登录自启——用户明确要停，重启后壁纸不该自己回来。
@@ -1416,8 +1451,12 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
 class PickerApp(Adw.Application):
     def __init__(self, snapshot_path=None, preselect=None):
+        # 正常运行是单实例（重复启动唤起已运行的窗口，托盘软件的标配）；
+        # snapshot 模式保持 NON_UNIQUE，便于应用正在运行时也能出开发截图
+        flags = Gio.ApplicationFlags.NON_UNIQUE if snapshot_path \
+            else Gio.ApplicationFlags.DEFAULT_FLAGS
         super().__init__(application_id="io.github.fitz.WallpaperPicker",
-                         flags=Gio.ApplicationFlags.NON_UNIQUE)
+                         flags=flags)
         self.snapshot_path = snapshot_path
         self.preselect = preselect
         # 用信号而不是覆写 do_shutdown：PyGObject 里对 shutdown vfunc
@@ -1436,6 +1475,9 @@ class PickerApp(Adw.Application):
             # 开发截图时用更高的画布、并展开折叠区，方便一次看全
             window.set_default_size(1280, 1400)
             window.settings_expander.set_expanded(True)
+        elif window.tray is None:
+            # 托盘只在正常运行时挂（snapshot 模式挂了也是徒增注册噪音）
+            window.init_tray()
         # 预选交给 reload() 消化：此时壁纸清单还没扫描，立刻 select 找不到对象
         window.preselect = self.preselect
         window.present()

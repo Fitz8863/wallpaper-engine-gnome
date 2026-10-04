@@ -143,12 +143,25 @@ do_measure（AspectPicture）。还有：FlowBox 的行高由子控件的「最�
 高度决定，do_measure 里最小值返回 0 的话图片会被压成细条——比例高度
 必须同时作为最小值返回。
 
+**GTK4 没有现成的托盘绑定，StatusNotifierItem 用 Gio 直接导出**
+Ayatana.AppIndicator3 的 introspection 依赖 Gtk-3.0，与本应用加载的
+Gtk-4.0 同进程冲突。tray.py 按 SNI 规范自实现 /StatusNotifierItem +
+/StatusNotifierMenu（精简 dbusmenu）。三个坑：
+- GNOME 的 AppIndicator 扩展持有 org.kde.StatusNotifierWatcher 名字，
+  但对象路径是 /StatusNotifierWatcher（不是规范文档的 /org/kde/...），
+  注册路径对不上会静默失败；
+- 用 GLib.Variant 构造 GetLayout 返回时，子结构不能传已构建的 Variant
+  （Variant.__new__ 会先 unpack 成裸值再重组，av 数组会退化报
+  "Expected GLib.Variant, but got str"），要传裸元组、子项保持 Variant；
+- 托盘宿主出现/消失用 bus_watch_name 监听，扩展挂掉重开会自动重新注册。
+托盘可用时点 ✕ 是隐藏到托盘；应用改为单实例（重复启动唤起已运行窗口），
+只有 snapshot 模式保留 NON_UNIQUE，避免与正在运行的应用打架。
+
 **壁纸分辨率从哪来（WE 式详情参数）**
 视频 = GStreamer Discoverer（gir1.2-gst-plugins-base-1.0，退 ffprobe）；
-场景 = scene.pkg 是 PKGV 格式（头 + 文件表，见 lwe 排查用的
-`_pkg_largest_tex_dims`），最大 .tex 头部直接带原始宽高，不用解码；
-26 张场景全是 pkg 打包、无散装图片，preview.jpg 是方形营销图不能当
-分辨率用；网页 = 自适应无分辨率。
+场景 = scene.pkg 是 PKGV 格式（头 + 文件表），最大 .tex 头部直接带
+原始宽高，不用解码；26 张场景全是 pkg 打包、无散装图片，preview.jpg
+是方形营销图不能当分辨率用；网页 = 自适应无分辨率。
 
 **覆写 `do_shutdown` 做 chain-up 会报 CRITICAL**
 想给应用加收尾钩子（如退出前 flush 设置），覆写 `do_shutdown` 再
