@@ -53,16 +53,26 @@ RENDERER = find_renderer()
 TYPE_LABEL = {"scene": "场景", "video": "视频", "web": "网页"}
 THUMB = 320
 
+# 渲染器 --volume 的默认值。设成这个值就不必往下传参数。
+RENDERER_DEFAULT_VOLUME = 15
+
 DEFAULT_SETTINGS = {
     "silent": False,
-    "volume": 15,
+    # 音量是逐壁纸的（与官方 Wallpaper Engine 一致）：每张壁纸记住自己的音量，
+    # volume_default 只作为没有单独设定时的兜底值。
+    "volume_default": RENDERER_DEFAULT_VOLUME,
+    "volumes": {},
     "fps": 30,
     "scaling": "default",
     "particles": True,
     "parallax": True,
     "mouse": True,
+    "automute": True,
     "properties": {},
 }
+
+# 值是字典的键，读盘时要单独处理，不能直接覆盖
+NESTED_SETTINGS = ("volumes", "properties")
 
 # 渲染器 --scaling 的合法取值（实测自 "allowed options" 报错信息）
 SCALING_CHOICES = [
@@ -105,18 +115,36 @@ CSS = """
 
 def load_settings():
     data = dict(DEFAULT_SETTINGS)
-    data["properties"] = {}
+    for key in NESTED_SETTINGS:
+        data[key] = {}          # 别和 DEFAULT_SETTINGS 共享同一个字典对象
     try:
         with open(SETTINGS_FILE, encoding="utf-8") as fh:
             disk = json.load(fh)
-        for key, value in disk.items():
-            if key == "properties" and isinstance(value, dict):
-                data["properties"] = value
-            elif key in data:
-                data[key] = value
     except Exception:
-        pass
+        return data
+
+    # 旧版本只有一个全局 volume，迁移成逐壁纸的兜底值
+    if "volume" in disk and "volume_default" not in disk:
+        try:
+            data["volume_default"] = int(disk["volume"])
+        except (TypeError, ValueError):
+            pass
+
+    for key, value in disk.items():
+        if key in NESTED_SETTINGS:
+            if isinstance(value, dict):
+                data[key] = value
+        elif key in data:
+            data[key] = value
     return data
+
+
+def wallpaper_volume(settings, wid):
+    """取某张壁纸的音量：单独设过就用它，没设过用兜底值。"""
+    volumes = settings.get("volumes") or {}
+    if wid in volumes:
+        return volumes[wid]
+    return settings.get("volume_default", RENDERER_DEFAULT_VOLUME)
 
 
 def save_settings(data):
@@ -347,6 +375,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.switching = False
         self._reapply_source = None
         self._props_token = 0
+        self._loading_volume = False   # 回填音量滑块时抑制回调，免得误保存
 
         provider = Gtk.CssProvider()
         provider.load_from_string(CSS)
@@ -478,6 +507,19 @@ class WallpaperPicker(Adw.ApplicationWindow):
             xalign=0, wrap=True, css_classes=["empty-hint", "card-badge"])
         self.props_box.append(self.props_hint)
 
+        box.append(Gtk.Separator())
+
+        # ---- 本壁纸设置（我们自己加的逐壁纸项，目前只有音量）----
+        # 音量放在这里而不是「播放设置」里，是因为它逐壁纸生效——
+        # 位置要跟语义一致，否则用户会以为调一次就全局生效了。
+        own_group = Adw.PreferencesGroup(title="本壁纸设置")
+        box.append(own_group)
+        self.row_volume = self.slider_row(
+            "音量", 0, 100, 1, RENDERER_DEFAULT_VOLUME,
+            self.on_volume_changed, suffix="%")
+        self.row_volume.set_sensitive(False)   # 没选中壁纸时不知道音量存给谁
+        own_group.add(self.row_volume)
+
         # ---- 播放设置（全局，收进折叠分组省空间）----
         group = Adw.PreferencesGroup(margin_top=4)
         self.settings_group = group
@@ -491,12 +533,6 @@ class WallpaperPicker(Adw.ApplicationWindow):
                                           self.settings["silent"],
                                           lambda v: self.set_global("silent", v))
         self.settings_expander.add_row(self.row_silent)
-
-        self.row_volume = self.slider_row("音量", 0, 100, 1,
-                                          self.settings["volume"],
-                                          lambda v: self.set_global("volume", int(v)),
-                                          suffix="%")
-        self.settings_expander.add_row(self.row_volume)
 
         self.row_fps = self.slider_row("帧率上限", 10, 144, 1,
                                        self.settings["fps"],
@@ -692,9 +728,23 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.apply_btn.set_label("使用中" if wall.wid == self.current_id else "应用")
         if not self.switching:
             self.apply_btn.set_sensitive(wall.wid != self.current_id)
+        self.load_volume(wall.wid)
+        self.update_volume_sensitivity()
         self.load_properties(wall)
         if apply_now:
             self.apply(wall)
+
+    def load_volume(self, wid):
+        """把该壁纸的音量回填到滑块上。
+
+        回填会触发 value-changed，必须先用标志位挡住回调，
+        否则会把兜底值当成"用户设定"写进这张壁纸的记录里。
+        """
+        self._loading_volume = True
+        try:
+            self.row_volume._scale.set_value(wallpaper_volume(self.settings, wid))
+        finally:
+            self._loading_volume = False
 
     # ---------------------------------------------------------- 壁纸属性
 
@@ -815,7 +865,33 @@ class WallpaperPicker(Adw.ApplicationWindow):
             return
         self.settings[key] = value
         save_settings(self.settings)
+        if key == "silent":
+            self.update_volume_sensitivity()
         self.schedule_reapply()
+
+    def on_volume_changed(self, value):
+        """音量逐壁纸保存（与官方 Wallpaper Engine 一致）。"""
+        if self._loading_volume or self.selected is None:
+            return
+        wid = self.selected.wid
+        value = int(value)
+        volumes = self.settings.setdefault("volumes", {})
+        if volumes.get(wid) == value:
+            return
+        volumes[wid] = value
+        save_settings(self.settings)
+        self.schedule_reapply(wid)
+
+    def update_volume_sensitivity(self):
+        """静音开着时，音量滑块拖了也没用，直接禁掉并说明原因。
+
+        官方 Wallpaper Engine 也是这个逻辑——显示器被静音时逐壁纸的
+        Volume 会显示为不可用。
+        """
+        silent = bool(self.settings.get("silent"))
+        self.row_volume.set_sensitive(self.selected is not None and not silent)
+        self.row_volume.set_subtitle(
+            "「静音」已开启，音量不生效" if silent else "")
 
     def set_property(self, name, value):
         if self.selected is None:
@@ -825,14 +901,19 @@ class WallpaperPicker(Adw.ApplicationWindow):
             return
         store[name] = value
         save_settings(self.settings)
-        self.schedule_reapply()
+        self.schedule_reapply(self.selected.wid)
 
-    def schedule_reapply(self):
+    def schedule_reapply(self, wid=None):
         """设置改动后重新应用壁纸。
 
         连续拖动滑块会触发很多次，所以做个防抖，避免把渲染器反复重启。
+
+        wid 表示改的是哪张壁纸的设置。如果改的不是正在运行的那张，就完全
+        不必重启渲染器——早期版本没区分这点，编辑别的壁纸会白白打断当前壁纸。
         """
         if self.current_id is None:
+            return
+        if wid is not None and wid != self.current_id:
             return
         if self._reapply_source is not None:
             GLib.source_remove(self._reapply_source)

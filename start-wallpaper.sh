@@ -59,11 +59,22 @@ except Exception:
     sys.exit(0)
 
 flags = []
+RENDERER_DEFAULT_VOLUME = 15
 if cfg.get('silent'):
     flags.append('--silent')
 
-volume = cfg.get('volume')
-if isinstance(volume, (int, float)) and int(volume) != 15:
+# 音量是逐壁纸的。三种情况都要兼容：
+#   volumes[wid]      当前格式
+#   volume_default    当前格式的兜底值
+#   volume            旧格式的全局音量（用户可能还没打开过新版界面）
+volumes = cfg.get('volumes') or {}
+if wid in volumes:
+    volume = volumes[wid]
+elif 'volume_default' in cfg:
+    volume = cfg['volume_default']
+else:
+    volume = cfg.get('volume', RENDERER_DEFAULT_VOLUME)
+if isinstance(volume, (int, float)) and int(volume) != RENDERER_DEFAULT_VOLUME:
     flags += ['--volume', str(int(volume))]
 
 fps = cfg.get('fps')
