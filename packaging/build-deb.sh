@@ -74,6 +74,19 @@ sed "s|@PROJECT_DIR@|/usr/lib/$PACKAGE|g" \
     > "$PKG/usr/share/applications/wallpaper-picker.desktop"
 chmod 644 "$PKG/usr/share/applications/wallpaper-picker.desktop"
 
+# ---- 应用图标 ----
+# PNG 为主（不依赖目标机器的 SVG 加载器），SVG 进 scalable 作矢量源。
+# 由 icons/generate.py 生成，改名或改设计后重跑它即可。
+ICON_NAME="io.github.fitz.WallpaperPicker"
+for s in 48x48 64x64 128x128 256x256; do
+    mkdir -p "$PKG/usr/share/icons/hicolor/$s/apps"
+    install -m 644 "$PROJECT_DIR/icons/hicolor/$s/apps/$ICON_NAME.png" \
+                   "$PKG/usr/share/icons/hicolor/$s/apps/"
+done
+mkdir -p "$PKG/usr/share/icons/hicolor/scalable/apps"
+install -m 644 "$PROJECT_DIR/icons/$ICON_NAME.svg" \
+               "$PKG/usr/share/icons/hicolor/scalable/apps/"
+
 # ---- 文档 ----
 install -m 644 "$PROJECT_DIR/README.md" "$PKG/usr/share/doc/$PACKAGE/README.md"
 install -m 644 "$PROJECT_DIR/LICENSE"   "$PKG/usr/share/doc/$PACKAGE/copyright"

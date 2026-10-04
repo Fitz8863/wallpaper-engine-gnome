@@ -173,6 +173,23 @@ install_desktop() {
         update-desktop-database "$APPS_DIR" 2>/dev/null || true
     fi
 
+    # 应用图标装进用户的 hicolor 主题，应用列表 / 窗口 / Alt+Tab 才有专属图标
+    local icon_name="io.github.fitz.WallpaperPicker"
+    if [ -d "$PROJECT_DIR/icons/hicolor" ]; then
+        mkdir -p "$HOME/.local/share/icons/hicolor"
+        cp -R "$PROJECT_DIR/icons/hicolor/." "$HOME/.local/share/icons/hicolor/"
+        if [ -f "$PROJECT_DIR/icons/$icon_name.svg" ]; then
+            mkdir -p "$HOME/.local/share/icons/hicolor/scalable/apps"
+            cp "$PROJECT_DIR/icons/$icon_name.svg" \
+               "$HOME/.local/share/icons/hicolor/scalable/apps/"
+        fi
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor" \
+                2>/dev/null || true
+        fi
+        ok "已安装应用图标"
+    fi
+
     chmod +x "$PROJECT_DIR/wallpaper-picker.py" "$PROJECT_DIR/start-wallpaper.sh"
     ok "脚本已可执行"
 }
