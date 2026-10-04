@@ -12,6 +12,7 @@
 命令行参数，因此图形界面和命令行行为一致。
 """
 
+import hashlib
 import json
 import os
 import re
@@ -42,6 +43,7 @@ STATE_DIR = os.environ.get(
                  "wallpaper-picker"))
 PIDFILE = os.path.join(STATE_DIR, "wallpaper.pid")
 SETTINGS_FILE = os.path.join(STATE_DIR, "settings.json")
+THUMB_DIR = os.path.join(STATE_DIR, "thumbs")
 
 # 路径探测与壁纸扫描都和 start-wallpaper.sh 共用同一份实现，
 # 避免两边行为不一致
@@ -53,6 +55,7 @@ RENDERER = find_renderer()
 
 TYPE_LABEL = {"scene": "场景", "video": "视频", "web": "网页"}
 THUMB = 320
+PREVIEW_SIZE = 480
 
 # 「帧率上限」对不同类型壁纸的效果完全不同，所以要跟着选中的壁纸说明。
 # 依据是官方文档 help.wallpaperengine.io/en/performance/gpu.html：
@@ -209,6 +212,89 @@ def load_thumbnail(path, size):
     return flat
 
 
+# ------------------------------------------------------------- 缩略图缓存
+#
+# 三层结构，逐层兜底：
+#   THUMB_CACHE   内存里的 Gdk.Texture，网格重建时零开销复用
+#   thumbs/ 目录  解码好的 JPEG，每天第一次启动不用重新解码全部预览图
+#   现场解码      两层都没有才走 load_thumbnail
+# 解码只在工作线程做，Texture 必须回主线程创建（GDK 对象不跨线程）。
+
+_THUMB_CACHE = {}      # (preview路径, 尺寸) -> Gdk.Texture
+_THUMB_LOCK = threading.Lock()
+_THUMB_PENDING = {}    # 同一张图的并发请求合并成一次解码
+
+
+def _thumb_cache_file(path, size):
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = 0
+    # mtime 进 key：Steam 更新了壁纸预览图，旧缓存自动失效
+    key = hashlib.sha1(
+        f"{path}|{mtime}|{size}".encode("utf-8", "replace")).hexdigest()[:16]
+    return os.path.join(THUMB_DIR, f"{key}.jpg")
+
+
+def load_thumbnail_cached(path, size):
+    """带磁盘缓存的解码，慢，只该在工作线程里调。"""
+    cache_file = _thumb_cache_file(path, size)
+    try:
+        return GdkPixbuf.Pixbuf.new_from_file(cache_file)
+    except Exception:
+        pass
+    pixbuf = load_thumbnail(path, size)
+    try:
+        os.makedirs(THUMB_DIR, exist_ok=True)
+        # load_thumbnail 已把 alpha 合成到深色底上，存 JPEG 没问题
+        pixbuf.savev(cache_file, "jpeg", ["quality"], ["85"])
+    except Exception:
+        pass    # 写不进去就退化为每次现场解码，不影响功能
+    return pixbuf
+
+
+def get_texture_async(path, size, callback):
+    """异步取缩略图，完成后在主线程回调 callback(texture)。
+
+    解码失败时回调 callback(None)，调用方自己兜底。
+    """
+    if not path:
+        return
+    key = (path, size)
+    texture = _THUMB_CACHE.get(key)
+    if texture is not None:
+        callback(texture)
+        return
+    with _THUMB_LOCK:
+        _THUMB_PENDING.setdefault(key, []).append(callback)
+        first = len(_THUMB_PENDING[key]) == 1
+    if not first:
+        return      # 已经有同一个 key 的解码在跑了，等它完成统一回调
+
+    def worker():
+        try:
+            pixbuf = load_thumbnail_cached(path, size)
+        except Exception:
+            pixbuf = None
+        GLib.idle_add(_finish_thumbnail, key, pixbuf)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _finish_thumbnail(key, pixbuf):
+    with _THUMB_LOCK:
+        callbacks = _THUMB_PENDING.pop(key, [])
+    if pixbuf is not None:
+        try:
+            _THUMB_CACHE[key] = Gdk.Texture.new_for_pixbuf(pixbuf)
+        except Exception:
+            pass
+    texture = _THUMB_CACHE.get(key)
+    for callback in callbacks:
+        callback(texture)
+    return False
+
+
 def scan_wallpapers():
     workshop = find_workshop()
     if workshop is None:
@@ -241,7 +327,7 @@ def extension_loaded():
     try:
         return subprocess.run(["gnome-extensions", "info", EXT_UUID],
                               capture_output=True, text=True,
-                              timeout=10).returncode == 0
+                              timeout=3).returncode == 0
     except Exception:
         return False
 
@@ -348,7 +434,11 @@ def parse_properties(raw):
 
 
 def fetch_properties(wid):
-    """跑一次渲染器读出该壁纸的可调属性（耗时，需放到后台线程）。"""
+    """跑一次渲染器读出该壁纸的可调属性（耗时，需放到后台线程）。
+
+    正常时返回属性列表（可能为空）；超时或进程异常返回 None，
+    None 不进缓存，下次选中还会重试。
+    """
     if not os.access(RENDERER, os.X_OK):
         return []
     try:
@@ -356,7 +446,7 @@ def fetch_properties(wid):
             [RENDERER, "--bg", wid, "--list-properties"],
             capture_output=True, text=True, timeout=60)
     except Exception:
-        return []
+        return None
     return parse_properties(out.stdout)
 
 
@@ -375,6 +465,9 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.switching = False
         self._reapply_source = None
         self._props_token = 0
+        self._preview_token = 0
+        self._props_cache = {}     # wid -> 属性列表（含空列表），重扫时清空
+        self._save_source = None
         self._loading_volume = False   # 回填音量滑块时抑制回调，免得误保存
 
         provider = Gtk.CssProvider()
@@ -395,7 +488,10 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.split.set_content(self.build_content())
         self.split.set_sidebar(self.build_sidebar())
 
-        self.reload()
+        # 窗口先显示再填数据：扫描、建卡片都挪到 idle 里，
+        # present() 之前的阻塞从几百毫秒降到几乎为零
+        self.status.set_text("正在扫描壁纸…")
+        GLib.idle_add(self.reload)
 
     # ---------------------------------------------------------- 主区域
 
@@ -429,11 +525,14 @@ class WallpaperPicker(Adw.ApplicationWindow):
         header.pack_end(self.spinner)
         view.add_top_bar(header)
 
+        # 扩展检查是个子进程调用，放后台线程，别拖慢窗口出现；
+        # 确认缺了才亮出提示，避免所有用户都看到横幅闪一下
         self.warn = Adw.Banner(
             title="GNOME 扩展还没被加载：请注销后重新登录一次，动态壁纸才会显示到桌面上",
-            revealed=not extension_loaded())
+            revealed=False)
         self.warn.set_button_label("知道了")
         view.add_top_bar(self.warn)
+        threading.Thread(target=self._check_extension, daemon=True).start()
 
         self.chips = Gtk.Box(spacing=6, margin_top=10, margin_bottom=4,
                              margin_start=14, margin_end=14)
@@ -467,6 +566,11 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if btn.get_active():
             self.active_filter = key
             self.populate()
+
+    def _check_extension(self):
+        """后台线程里查扩展状态，回主线程再动横幅。"""
+        ok = extension_loaded()
+        GLib.idle_add(self.warn.set_revealed, not ok)
 
     # ---------------------------------------------------------- 属性面板
 
@@ -626,6 +730,9 @@ class WallpaperPicker(Adw.ApplicationWindow):
     # ---------------------------------------------------------- 数据刷新
 
     def reload(self):
+        # 重扫 = 工坊内容可能变了，两层解码结果都不再可信
+        _THUMB_CACHE.clear()
+        self._props_cache.clear()
         self.wallpapers = scan_wallpapers()
         self.current_id = running_wallpaper_id()
         self.populate()
@@ -684,13 +791,10 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
         picture = Gtk.Picture(can_shrink=True, css_classes=["thumb"])
         picture.set_size_request(-1, int(THUMB * 0.60))
+        # 解码在后台线程做；回填时卡片可能已被搜索/筛选重建掉，回调里要确认
         if wall.preview:
-            try:
-                texture = Gdk.Texture.new_for_pixbuf(
-                    load_thumbnail(wall.preview, THUMB))
-                picture.set_paintable(texture)
-            except Exception:
-                pass
+            get_texture_async(wall.preview, THUMB,
+                              lambda tex, w=wall: self._set_card_thumb(w, tex))
         picture.set_content_fit(Gtk.ContentFit.COVER)
         box.append(picture)
 
@@ -715,9 +819,17 @@ class WallpaperPicker(Adw.ApplicationWindow):
         child.set_child(button)
 
         # 记下需要在高亮更新时改动的控件，避免重建整个网格
-        self.cards[wall.wid] = {"child": child, "box": box, "badge": badge}
+        self.cards[wall.wid] = {"child": child, "box": box, "badge": badge,
+                                "picture": picture}
         badge.set_text(self.badge_text(wall.wid))
         return child
+
+    def _set_card_thumb(self, wall, texture):
+        """异步解码完成后回填卡片缩略图。"""
+        card = self.cards.get(wall.wid)
+        if card is None or texture is None:
+            return
+        card["picture"].set_paintable(texture)
 
     def select(self, wall, apply_now):
         if wall is None:
@@ -729,12 +841,11 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.subtitle.set_text(
             f"{TYPE_LABEL.get(wall.wtype, wall.wtype)} · {wall.wid}")
         self.preview.set_paintable(None)
+        self._preview_token += 1
+        token = self._preview_token
         if wall.preview:
-            try:
-                self.preview.set_paintable(Gdk.Texture.new_for_pixbuf(
-                    load_thumbnail(wall.preview, 480)))
-            except Exception:
-                pass
+            get_texture_async(wall.preview, PREVIEW_SIZE,
+                              lambda tex, t=token: self._set_preview(tex, t))
         self.apply_btn.set_label("使用中" if wall.wid == self.current_id else "应用")
         if not self.switching:
             self.apply_btn.set_sensitive(wall.wid != self.current_id)
@@ -757,12 +868,27 @@ class WallpaperPicker(Adw.ApplicationWindow):
         finally:
             self._loading_volume = False
 
+    def _set_preview(self, texture, token):
+        """异步解码完成后回填侧栏大预览；快速连点时旧请求作废。"""
+        if token != self._preview_token or texture is None:
+            return
+        self.preview.set_paintable(texture)
+
     # ---------------------------------------------------------- 壁纸属性
 
     def load_properties(self, wall):
-        """后台线程读属性，避免卡住界面。"""
+        """读属性列表并渲染面板。缓存命中直接渲染，否则后台线程读。
+
+        网页类壁纸的 --list-properties 要拉起 CEF，耗时数秒——不缓存的话
+        每次点同一张卡片都得等一轮。
+        """
         self._props_token += 1
         token = self._props_token
+
+        cached = self._props_cache.get(wall.wid)
+        if cached is not None:
+            self.render_properties(wall.wid, cached, token)
+            return
 
         while (child := self.props_box.get_first_child()) is not None:
             self.props_box.remove(child)
@@ -773,6 +899,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
         def worker():
             props = fetch_properties(wall.wid)
+            if props is not None:      # None = 读取失败，不缓存，可重试
+                self._props_cache[wall.wid] = props
             GLib.idle_add(self.render_properties, wall.wid, props, token)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -875,7 +1003,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if self.settings.get(key) == value:
             return
         self.settings[key] = value
-        save_settings(self.settings)
+        self.schedule_save()
         if key == "silent":
             self.update_volume_sensitivity()
         self.schedule_reapply()
@@ -890,7 +1018,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if volumes.get(wid) == value:
             return
         volumes[wid] = value
-        save_settings(self.settings)
+        self.schedule_save()
         self.schedule_reapply(wid)
 
     def update_volume_sensitivity(self):
@@ -920,8 +1048,27 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if store.get(name) == value:
             return
         store[name] = value
-        save_settings(self.settings)
+        self.schedule_save()
         self.schedule_reapply(self.selected.wid)
+
+    def schedule_save(self):
+        """设置改动合并写盘。
+
+        拖滑块时 value-changed 每个刻度都触发，逐次写盘毫无意义——
+        一次拖动就是上百次。400ms 内的改动合并成一次写入。
+        定得比 reapply 的 700ms 短，保证渲染器重启前新值已经落盘。
+        """
+        if self._save_source is not None:
+            GLib.source_remove(self._save_source)
+        self._save_source = GLib.timeout_add(400, self._flush_save)
+
+    def _flush_save(self, *_args):
+        self._save_source = None
+        try:
+            save_settings(self.settings)
+        except Exception:
+            pass
+        return False
 
     def schedule_reapply(self, wid=None):
         """设置改动后重新应用壁纸。
@@ -980,6 +1127,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
     def apply(self, wall, quiet=False):
         if wall is None or getattr(self, "switching", False):
             return
+        self._flush_save()   # 启动脚本马上要读 settings.json，先落盘
         self.set_busy(True, f"正在切换：{wall.title} …")
 
         def done(result):
@@ -1052,6 +1200,15 @@ class PickerApp(Adw.Application):
                          flags=Gio.ApplicationFlags.NON_UNIQUE)
         self.snapshot_path = snapshot_path
         self.preselect = preselect
+        # 用信号而不是覆写 do_shutdown：PyGObject 里对 shutdown vfunc
+        # 做 chain-up 会报 "failed to chain up" 的 CRITICAL
+        self.connect("shutdown", self._on_shutdown)
+
+    def _on_shutdown(self, _app):
+        # 写盘防抖意味着退出时可能有改动还没落盘，兜底 flush 一次
+        window = self.props.active_window
+        if window is not None:
+            window._flush_save()
 
     def do_activate(self):
         window = self.props.active_window or WallpaperPicker(self)
