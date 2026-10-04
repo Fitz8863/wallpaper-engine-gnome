@@ -1,0 +1,18 @@
+diff --git a/src/WallpaperEngine/Render/Drivers/Output/WaylandOutputViewport.cpp b/src/WallpaperEngine/Render/Drivers/Output/WaylandOutputViewport.cpp
+index 21fc485..9cbc6f0 100644
+--- a/src/WallpaperEngine/Render/Drivers/Output/WaylandOutputViewport.cpp
++++ b/src/WallpaperEngine/Render/Drivers/Output/WaylandOutputViewport.cpp
+@@ -307,6 +307,13 @@ void WaylandOutputViewport::setupXdgWindow () {
+     xdg_toplevel_set_title (xdgToplevel, buildWindowTitle ().c_str ());
+     xdg_toplevel_set_app_id (xdgToplevel, "linux-wallpaperengine");
+ 
++    // Request fullscreen on the target output. Without this Mutter
++    // constrains the floating window to the workarea (excluding the dock
++    // and the top bar), so the shell-side clone upscales a smaller buffer
++    // to the full monitor and the wallpaper looks soft. A fullscreen
++    // configure returns the exact output size, keeping the clone 1:1.
++    xdg_toplevel_set_fullscreen (xdgToplevel, this->output);
++
+     // Listen for configure and close events
+     xdg_surface_add_listener (xdgSurface, &xdgSurfaceListener, this);
+     xdg_toplevel_add_listener (xdgToplevel, &xdgToplevelListener, this);

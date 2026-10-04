@@ -92,6 +92,20 @@ install_renderer() {
     git -C "$RENDERER_DIR" submodule update --init --recursive \
         || warn "部分子模块拉取失败（网络原因），可重试"
 
+    # 应用本地补丁（patches/ 下）。补丁已应用或与上游版本不匹配时自动跳过。
+    # 0001 修的是：Mutter 会把 gnome 模式的窗口约束在工作区内
+    # （2560 屏上只给 2464x1546），扩展克隆拉伸后壁纸整体发虚。
+    for patch in "$PROJECT_DIR"/patches/*.patch; do
+        [ -e "$patch" ] || continue
+        if git -C "$RENDERER_DIR" apply --check "$patch" 2>/dev/null; then
+            git -C "$RENDERER_DIR" apply "$patch" \
+                && ok "已应用渲染器补丁: $(basename "$patch")" \
+                || warn "渲染器补丁应用失败: $(basename "$patch")"
+        else
+            ok "渲染器补丁已应用，跳过: $(basename "$patch")"
+        fi
+    done
+
     local bin="$RENDERER_DIR/build/output/linux-wallpaperengine"
     if [ -x "$bin" ]; then
         ok "渲染器已编译: $bin"
