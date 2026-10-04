@@ -43,7 +43,7 @@ Wallpaper Engine 本体在 Linux 上通过 Proton 运行，**仅用于浏览和�
 ## 安装
 
 ```bash
-git clone <你的仓库地址> ~/projects/wallpaper
+git clone https://github.com/Fitz8863/wallpaper-for-ubuntu.git ~/projects/wallpaper
 cd ~/projects/wallpaper
 ./install.sh
 ```
