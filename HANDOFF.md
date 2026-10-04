@@ -121,6 +121,21 @@ wallpaper-picker.py ──调用──▶ start-wallpaper.sh ──启动──�
 **`Gdk.RGBA(...)` 不能传构造参数**
 PyGObject 会静默忽略并给一个全透明色，只能先建对象再逐个赋值。
 
+**作者可以给滑块属性留 Step=0，GTK 构造控件直接断言失败**
+`gtk_scale_new_with_range` 要求 `step != 0.0`，而 `spec["step"] or 0.01` 这类
+兜底拦不住非空的 `"0"`（实测「樱花庄的宠物女孩」27 个滑块全是 Step=0，
+点击该壁纸必崩，面板卡在"正在读取"）。数值兜底必须显式比较（step <= 0
+时改用 (hi-lo)/100，min>=max 时钳回 0..1）。控件生成已按属性隔离——
+一个属性的数据坏只跳过它自己。combo 的选项文本也可能是 HTML，用
+clean_label 同样处理。另：读取失败（超时返回 None）与"没有可调项"
+（空列表）要区分提示，前者重选可重试。
+
+**reload() 挪到 idle 后，do_activate 里不能消费壁纸清单**
+启动顺序改成"先 present 再扫描"后，do_activate 时 `window.wallpapers`
+还是空的——原来的 `--select` 预选在那里找不到对象，静默失效。依赖扫描
+结果的逻辑一律由 reload() 在扫描完成后消化（preselect 现在挂在 window
+上，reload 尾部处理）。
+
 **覆写 `do_shutdown` 做 chain-up 会报 CRITICAL**
 想给应用加收尾钩子（如退出前 flush 设置），覆写 `do_shutdown` 再
 `super().do_shutdown()`，PyGObject 会报 `failed to chain up on ::shutdown`。

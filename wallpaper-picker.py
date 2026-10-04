@@ -470,6 +470,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self._preview_token = 0
         self._props_cache = {}     # wid -> 属性列表（含空列表），重扫时清空
         self._save_source = None
+        self.preselect = None      # --select 参数，reload 扫描完成后消化
         self._loading_volume = False   # 回填音量滑块时抑制回调，免得误保存
 
         provider = Gtk.CssProvider()
@@ -739,9 +740,11 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.current_id = running_wallpaper_id()
         self.populate()
         self.update_status()
-        if self.selected is None and self.current_id:
+        # 启动时自动选中：优先命令行的 --select，其次正在运行的壁纸
+        if self.selected is None:
+            want = self.preselect or self.current_id
             match = next((w for w in self.wallpapers
-                          if w.wid == self.current_id), None)
+                          if w.wid == want), None) if want else None
             if match:
                 self.select(match, apply_now=False)
 
@@ -914,6 +917,12 @@ class WallpaperPicker(Adw.ApplicationWindow):
         while (child := self.props_box.get_first_child()) is not None:
             self.props_box.remove(child)
 
+        if props is None:
+            self.props_box.append(Gtk.Label(
+                label="属性读取失败（可能超时），重新选中这张壁纸可重试",
+                xalign=0, wrap=True, css_classes=["empty-hint", "card-badge"]))
+            self.props_header.set_text("壁纸属性")
+            return False
         if not props:
             self.props_box.append(Gtk.Label(
                 label="这张壁纸没有可调项", xalign=0,
@@ -924,74 +933,14 @@ class WallpaperPicker(Adw.ApplicationWindow):
         saved = self.settings["properties"].get(wid, {})
 
         for spec in props:
-            name = spec["name"]
-            value = saved.get(name, spec["value"])
             widget = None
-            if spec["type"] == "boolean":
-                widget = Adw.SwitchRow(
-                    title=spec["label"],
-                    active=str(value).strip() not in ("0", "false", "False", ""))
-                widget.connect(
-                    "notify::active",
-                    lambda r, _p, n=name: self.set_property(
-                        n, "1" if r.get_active() else "0"))
-            elif spec["type"] == "slider":
-                try:
-                    lo = float(spec["min"] or 0)
-                    hi = float(spec["max"] or 1)
-                    step = float(spec["step"] or 0.01)
-                except ValueError:
-                    lo, hi, step = 0.0, 1.0, 0.01
-                try:
-                    cur = float(value)
-                except ValueError:
-                    cur = lo
-                scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,
-                                                 lo, hi, step)
-                scale.set_value(cur)
-                scale.set_hexpand(True)
-                scale.set_draw_value(False)
-                readout = Gtk.Label(label=f"{cur:g}", width_chars=6, xalign=1)
-                scale.connect(
-                    "value-changed",
-                    lambda sc, n=name, lab=readout: (
-                        lab.set_text(f"{sc.get_value():g}"),
-                        self.set_property(n, f"{sc.get_value():g}")))
-                widget = Adw.ActionRow(title=spec["label"])
-                widget.add_suffix(scale)
-                widget.add_suffix(readout)
-            elif spec["type"] == "combo" and spec["options"]:
-                values = [opt[0] for opt in spec["options"]]
-                labels = [opt[1] for opt in spec["options"]]
-                dropdown = Gtk.DropDown.new_from_strings(labels)
-                if str(value) in values:
-                    dropdown.set_selected(values.index(str(value)))
-                dropdown.set_valign(Gtk.Align.CENTER)
-                dropdown.connect(
-                    "notify::selected",
-                    lambda dd, _p, n=name, vals=values:
-                        self.set_property(n, vals[dd.get_selected()]))
-                widget = Adw.ActionRow(title=spec["label"])
-                widget.add_suffix(dropdown)
-            elif spec["type"] == "color":
-                # 渲染器读写的格式是 "r, g, b, a" 四个 0-1 浮点数
-                rgba = Gdk.RGBA()
-                try:
-                    parts = [float(p) for p in str(value).split(",")[:4]]
-                    rgba.red, rgba.green, rgba.blue, rgba.alpha = parts
-                except ValueError:
-                    rgba.parse("#000000")
-                button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
-                button.set_rgba(rgba)
-                button.set_valign(Gtk.Align.CENTER)
-                button.connect(
-                    "notify::rgba",
-                    lambda btn, _p, n=name: self.set_property(
-                        n, "%.6f, %.6f, %.6f, %.6f" % (
-                            btn.get_rgba().red, btn.get_rgba().green,
-                            btn.get_rgba().blue, btn.get_rgba().alpha)))
-                widget = Adw.ActionRow(title=spec["label"])
-                widget.add_suffix(button)
+            try:
+                widget = self._build_property_widget(
+                    spec, saved.get(spec["name"], spec["value"]))
+            except Exception as exc:
+                # 作者侧数据可能退化（实测有 Step=0 的滑块），单个属性
+                # 生成失败只跳过它自己，别拖垮整个面板
+                print(f"属性控件生成失败({spec['name']}): {exc}")
 
             if widget is not None:
                 self.props_box.append(widget)
@@ -999,6 +948,88 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
         self.props_header.set_text(f"壁纸属性（{len(self.prop_rows)} 项）")
         return False
+
+    def _build_property_widget(self, spec, value):
+        """按属性类型生成控件。参数异常时抛错，由调用方按属性隔离。"""
+        name = spec["name"]
+        if spec["type"] == "boolean":
+            widget = Adw.SwitchRow(
+                title=spec["label"],
+                active=str(value).strip() not in ("0", "false", "False", ""))
+            widget.connect(
+                "notify::active",
+                lambda r, _p, n=name: self.set_property(
+                    n, "1" if r.get_active() else "0"))
+            return widget
+        if spec["type"] == "slider":
+            try:
+                lo = float(spec["min"] or 0)
+                hi = float(spec["max"] or 1)
+                step = float(spec["step"] or 0.01)
+            except ValueError:
+                lo, hi, step = 0.0, 1.0, 0.01
+            # "0" 是非空字符串，上面的 or 兜底拦不住；Step=0 会让 GTK
+            # 断言失败、控件构造返回 NULL，min>=max 同样非法
+            if hi <= lo:
+                lo, hi = 0.0, 1.0
+            if step <= 0:
+                step = (hi - lo) / 100.0
+            try:
+                cur = float(value)
+            except ValueError:
+                cur = lo
+            scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,
+                                             lo, hi, step)
+            scale.set_value(cur)
+            scale.set_hexpand(True)
+            scale.set_draw_value(False)
+            readout = Gtk.Label(label=f"{cur:g}", width_chars=6, xalign=1)
+            scale.connect(
+                "value-changed",
+                lambda sc, n=name, lab=readout: (
+                    lab.set_text(f"{sc.get_value():g}"),
+                    self.set_property(n, f"{sc.get_value():g}")))
+            row = Adw.ActionRow(title=spec["label"])
+            row.add_suffix(scale)
+            row.add_suffix(readout)
+            return row
+        if spec["type"] == "combo" and spec["options"]:
+            values = [opt[0] for opt in spec["options"]]
+            # 选项文本同样可能是作者写的 HTML（"<p>椎名真白<br>…"），剥成
+            # 纯文本；剥不出结果的用原文兜底
+            labels = [clean_label(opt[1], opt[1]) for opt in spec["options"]]
+            dropdown = Gtk.DropDown.new_from_strings(labels)
+            if str(value) in values:
+                dropdown.set_selected(values.index(str(value)))
+            dropdown.set_valign(Gtk.Align.CENTER)
+            dropdown.connect(
+                "notify::selected",
+                lambda dd, _p, n=name, vals=values:
+                    self.set_property(n, vals[dd.get_selected()]))
+            row = Adw.ActionRow(title=spec["label"])
+            row.add_suffix(dropdown)
+            return row
+        if spec["type"] == "color":
+            # 渲染器读写的格式是 "r, g, b, a" 四个 0-1 浮点数
+            rgba = Gdk.RGBA()
+            try:
+                parts = [float(p) for p in str(value).split(",")[:4]]
+                rgba.red, rgba.green, rgba.blue, rgba.alpha = parts
+            except ValueError:
+                rgba.parse("#000000")
+            button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
+            button.set_rgba(rgba)
+            button.set_valign(Gtk.Align.CENTER)
+            button.connect(
+                "notify::rgba",
+                lambda btn, _p, n=name: self.set_property(
+                    n, "%.6f, %.6f, %.6f, %.6f" % (
+                        btn.get_rgba().red, btn.get_rgba().green,
+                        btn.get_rgba().blue, btn.get_rgba().alpha)))
+            row = Adw.ActionRow(title=spec["label"])
+            row.add_suffix(button)
+            return row
+        return None
 
     # ---------------------------------------------------------- 设置变更
 
@@ -1230,12 +1261,9 @@ class PickerApp(Adw.Application):
             # 开发截图时用更高的画布、并展开折叠区，方便一次看全
             window.set_default_size(1280, 1400)
             window.settings_expander.set_expanded(True)
+        # 预选交给 reload() 消化：此时壁纸清单还没扫描，立刻 select 找不到对象
+        window.preselect = self.preselect
         window.present()
-        if self.preselect:
-            match = next((w for w in window.wallpapers
-                          if w.wid == self.preselect), None)
-            if match is not None:
-                window.select(match, apply_now=False)
         if self.snapshot_path:
             GLib.timeout_add(2500, self._snapshot, window)
 
