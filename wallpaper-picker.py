@@ -53,6 +53,16 @@ RENDERER = find_renderer()
 TYPE_LABEL = {"scene": "场景", "video": "视频", "web": "网页"}
 THUMB = 320
 
+# 「帧率上限」对不同类型壁纸的效果完全不同，所以要跟着选中的壁纸说明。
+# 依据是官方文档 help.wallpaperengine.io/en/performance/gpu.html：
+# 视频有固定帧率，调上限不影响它；场景是实时渲染，上限才真正起作用。
+FPS_HINTS = {
+    "video": "视频壁纸的帧率由视频文件本身决定，这一项对它无效",
+    "scene": "场景壁纸是实时渲染的，调低这一项可以省电",
+    "web": "网页壁纸由 CEF 渲染，这一项效果有限",
+}
+FPS_HINT_DEFAULT = "限制渲染帧率，可省电"
+
 # 渲染器 --volume 的默认值。设成这个值就不必往下传参数。
 RENDERER_DEFAULT_VOLUME = 15
 
@@ -539,6 +549,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
                                        lambda v: self.set_global("fps", int(v)),
                                        suffix=" fps")
         self.settings_expander.add_row(self.row_fps)
+        self.update_fps_hint()   # 先给个通用说明，选中壁纸后会换成针对性的
 
         self.row_scaling = self.combo_row("缩放模式", SCALING_CHOICES,
                                           self.settings["scaling"],
@@ -739,6 +750,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
             self.apply_btn.set_sensitive(wall.wid != self.current_id)
         self.load_volume(wall.wid)
         self.update_volume_sensitivity()
+        self.update_fps_hint(wall.wtype)
         self.load_properties(wall)
         if apply_now:
             self.apply(wall)
@@ -901,6 +913,15 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.row_volume.set_sensitive(self.selected is not None and not silent)
         self.row_volume.set_subtitle(
             "「静音」已开启，音量不生效" if silent else "")
+
+    def update_fps_hint(self, wtype=None):
+        """帧率上限对不同类型壁纸的效果差别很大，副标题跟着选中的壁纸变。
+
+        直接在这一行说明，比在别处写一段文档有效——用户正好在看这一行。
+        """
+        if wtype is None and self.selected is not None:
+            wtype = self.selected.wtype
+        self.row_fps.set_subtitle(FPS_HINTS.get(wtype or "", FPS_HINT_DEFAULT))
 
     def set_property(self, name, value):
         if self.selected is None:
