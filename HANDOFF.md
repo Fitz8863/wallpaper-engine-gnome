@@ -20,9 +20,10 @@
 ## 目录结构
 
 ```
-wallpaper-picker.py     GTK4 + libadwaita 图形选择器（主程序，约 1000 行）
-start-wallpaper.sh      命令行启动器：参数解析、清单扫描、进程管理、自启
+wallpaper-picker.py     GTK4 + libadwaita 图形选择器（主程序，约 1100 行）
+start-wallpaper.sh      命令行启动器：参数解析、进程管理、自启
 lwe_paths.py            路径与显示器探测（被上面两者共用）
+lwe_scan.py             创意工坊扫描：清单解析+排序（被上面两者共用）
 install.sh              一键安装：系统依赖 → 编译渲染器 → 装扩展 → 注册入口
 packaging/
   build-deb.sh          构建 deb（只打包本项目这一层）
@@ -117,6 +118,11 @@ wallpaper-picker.py ──调用──▶ start-wallpaper.sh ──启动──�
 
 **`Gdk.RGBA(...)` 不能传构造参数**
 PyGObject 会静默忽略并给一个全透明色，只能先建对象再逐个赋值。
+
+**覆写 `do_shutdown` 做 chain-up 会报 CRITICAL**
+想给应用加收尾钩子（如退出前 flush 设置），覆写 `do_shutdown` 再
+`super().do_shutdown()`，PyGObject 会报 `failed to chain up on ::shutdown`。
+改用 `self.connect("shutdown", ...)` 信号，语义相同、没有这个坑。
 
 ### 性能与交互
 
@@ -224,7 +230,8 @@ python3 lwe_paths.py screen      # 只打印探测到的主显示器
 
 **已完成并验证**：图形界面（网格/搜索/筛选/属性面板/播放设置）、
 路径与显示器自动探测、deb 打包（含安装/升级/卸载全流程）、v1.0.0 已发布。
-另有后续三项已实现（见下方提交历史）。
+另有后续六项已实现（见下方提交历史），其中界面性能专项实测：
+重建网格 270ms→12ms、窗口显示前阻塞 444ms→12ms。
 
 **设置的分层**（与官方对齐后的结构）：
 
@@ -257,6 +264,9 @@ python3 lwe_paths.py screen      # 只打印探测到的主显示器
 | `114660d` | 音量改为逐壁纸；顺带修了「编辑非当前壁纸会打断运行中的壁纸」 |
 | `7cb26e0` | 暴露自动静音开关（对应渲染器的 `--noautomute`） |
 | `979a1f4` | 帧率上限的说明跟着壁纸类型变（视频/场景/网页效果不同） |
+| `1214d10` | 扫描逻辑抽成 `lwe_scan.py`，界面与命令行共用一份实现 |
+| `6c91031` | 界面性能专项：缩略图双层缓存+异步解码（内存 Texture + `thumbs/` 磁盘层）、属性面板按壁纸 ID 缓存、设置写盘 400ms 防抖、启动先 present 再填数据 |
+| `6827173` | 名称匹配改字面比较（`[4K]` 这类括号不再被当正则）；停止壁纸时撤掉登录自启（界面与 CLI 一致） |
 
 ## 发布流程
 
@@ -284,7 +294,7 @@ gh release upload v1.0.0 dist/*.deb --repo <owner>/<repo> --clobber
 - 系统：Ubuntu 24.04 + GNOME Shell 46 + **Wayland** + NVIDIA RTX 4060（独显模式）
 - 项目目录：`~/projects/wallpaper`
 - 渲染器源码与构建产物：`~/linux-wallpaperengine`（外部依赖，**不要在这里改代码**）
-- 运行时状态：`~/.cache/wallpaper-picker/`（壁纸清单、日志、pid、settings.json）
+- 运行时状态：`~/.cache/wallpaper-picker/`（壁纸清单、日志、pid、settings.json、缩略图缓存 thumbs/）
 - Steam 库：`~/.steam/debian-installation`，42 张壁纸
   （26 场景 + 12 视频 + 3 网页 + 1 无法解析）
 - 应用入口：`~/.local/share/applications/wallpaper-picker.desktop`

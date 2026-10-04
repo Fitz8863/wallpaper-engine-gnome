@@ -19,7 +19,7 @@
   - **播放设置**——静音、帧率上限、缩放模式、其他程序出声时自动静音、
     粒子/视差/鼠标交互开关，全局生效
 - **设置持久化**：写入 `settings.json`，界面和命令行共用同一份配置
-- **登录自启**：切换壁纸时自动记住，下次开机还是它
+- **登录自启**：切换壁纸时自动记住，下次开机还是它；点「停止」会撤掉自启
 - **命令行**：可脚本化调用，支持 ID、名称关键词、播放列表
 
 ### 关于"播放速度"
@@ -180,8 +180,9 @@ python3 "$PROJECT/wallpaper-picker.py" --select 3422875812   # 启动时预选�
 ```
 
 点击任意壁纸卡片即应用；右侧面板显示这张壁纸自己的可调项；右上角「停止」可关闭
-动态壁纸。改动设置不需要手动保存，会自动写盘并重新加载壁纸（带防抖，拖滑块不会
-把渲染器反复重启）。
+动态壁纸——**停止会同时撤掉登录自启**，停了就是停了，下次开机不会再自动恢复；
+重新选一张壁纸会自动恢复自启。改动设置不需要手动保存，会自动写盘并重新加载壁纸
+（带防抖，拖滑块不会把渲染器反复重启）。
 
 ### 命令行
 
@@ -190,7 +191,7 @@ cd "$PROJECT"
 ./start-wallpaper.sh --list          # 列出全部壁纸（自动扫描工坊目录）
 ./start-wallpaper.sh 3050160027      # 按 ID 切换
 ./start-wallpaper.sh 芙莉莲           # 按名称关键词切换
-./start-wallpaper.sh --stop          # 停止
+./start-wallpaper.sh --stop          # 停止（并撤掉登录自启）
 ./start-wallpaper.sh --status        # 查看状态
 ./start-wallpaper.sh 3050160027 -f 30 --disable-particles   # 透传渲染器参数
 ```
@@ -226,7 +227,7 @@ export LWE_SCREEN="HDMI-1"
 | `LWE_ASSETS` | Wallpaper Engine 的 `assets` 目录 | 同上，在库里找 `common/wallpaper_engine/assets` |
 | `LWE_BIN` | 渲染器二进制路径 | `~/linux-wallpaperengine/build/output/linux-wallpaperengine` |
 | `LWE_SCREEN` | 显示器名 | 向 Mutter 查询主屏，失败才回落 `eDP-1` |
-| `LWE_STATE_DIR` | 运行时状态目录（壁纸清单/日志/pid） | `~/.cache/wallpaper-picker` |
+| `LWE_STATE_DIR` | 运行时状态目录（壁纸清单/日志/pid/缩略图缓存） | `~/.cache/wallpaper-picker` |
 
 排查路径问题时：
 
