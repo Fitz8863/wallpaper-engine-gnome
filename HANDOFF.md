@@ -31,6 +31,7 @@ packaging/
   enable-extension.py   deb 安装/卸载时增删 GNOME 扩展启用项
 gnome-extension/        配套 GNOME Shell 扩展（GPL-3.0 第三方代码，见其 README）
 desktop/                桌面入口模板，用 @PROJECT_DIR@ 占位，安装时替换
+icons/                  应用图标：generate.py 一键再生成 SVG 与各尺寸 PNG
 ```
 
 ## 架构与数据流
@@ -177,6 +178,14 @@ GNOME Shell 会缓存 `.desktop` 的内容，而**原地改写文件不一定能
 `git clone --recurse-submodules` 后要确认 `src/External/` 下的目录非空，
 必要时 `git submodule update --init --recursive --force` 补一次。
 
+**hicolor 的 scalable SVG 图标不能假设目标机器渲染得了**
+图标分发以 PNG 为主（48/64/128/256 全尺寸），SVG 只作矢量源附带。
+原因：SVG 加载依赖目标机器的 gdk-pixbuf librsvg 加载器，实测存在
+`loaders.cache` 里注册了 SVG 加载器、加载时却报
+"Couldn't recognize the image file format" 的环境。另外 ImageMagick
+的 `convert` 渲染 SVG 不认渐变/圆角裁剪，矢量图一律用
+`icons/generate.py`（cairo）出图，别用 convert。
+
 ## 开发与调试
 
 ### 从源码运行（不要点图标）
@@ -188,6 +197,12 @@ python3 wallpaper-picker.py
 
 点图标的话错误信息会被吞掉。**从终端跑才能看到报错**。
 改代码后重启程序即生效，不需要重装。
+
+### 改动纪律
+
+每次改动跑完验证（`py_compile`/`bash -n`、`--snapshot` 目检、计时对比、
+针对性回归脚本）就 `git commit` 存档——一个主题一个提交，保证任何时候都
+能回退到「已验证过的状态」。push 时机由维护者决定。
 
 ### 界面自查（绕开 GNOME 截图限制）
 
