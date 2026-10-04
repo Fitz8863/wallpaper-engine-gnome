@@ -43,16 +43,11 @@ STATE_DIR = os.environ.get(
 PIDFILE = os.path.join(STATE_DIR, "wallpaper.pid")
 SETTINGS_FILE = os.path.join(STATE_DIR, "settings.json")
 
-RENDERER = os.environ.get(
-    "LWE_BIN", f"{HOME}/linux-wallpaperengine/build/output/linux-wallpaperengine")
+# 路径探测与 start-wallpaper.sh 共用同一份实现，避免两边行为不一致
+sys.path.insert(0, ROOT)
+from lwe_paths import find_renderer, find_workshop  # noqa: E402
 
-WORKSHOP_CANDIDATES = [
-    f"{HOME}/.local/share/Steam/steamapps/workshop/content/431960",
-    f"{HOME}/.steam/steam/steamapps/workshop/content/431960",
-    f"{HOME}/.steam/debian-installation/steamapps/workshop/content/431960",
-    f"{HOME}/.var/app/com.valvesoftware.Steam/.local/share/Steam"
-    "/steamapps/workshop/content/431960",
-]
+RENDERER = find_renderer()
 
 TYPE_LABEL = {"scene": "场景", "video": "视频", "web": "网页"}
 THUMB = 320
@@ -142,13 +137,6 @@ class Wallpaper:
         self.title = title
         self.preview = preview
         self.dir = directory
-
-
-def find_workshop():
-    for path in WORKSHOP_CANDIDATES:
-        if os.path.isdir(path):
-            return path
-    return None
 
 
 def load_thumbnail(path, size):

@@ -29,45 +29,121 @@
 同样地，「缩放模式」对应渲染器的 `--scaling`，可选
 默认 / 填充（裁切边缘）/ 适应（保留黑边）/ 拉伸。
 
+## 前置条件
+
+开始之前，你需要已经具备这三样：
+
+1. **装了 Steam**——原生 deb 包、Flatpak、Snap 都可以，本方案会自动识别
+2. **在 Steam 上买过并安装了 Wallpaper Engine**（appid `431960`）
+3. **在创意工坊订阅了至少一张壁纸**——订阅之后 Steam 才会把它下载到本地
+
+这三步缺一不可。**本方案不下载壁纸**，它只负责把已经下载到本地的壁纸渲染成桌面背景。
+
+Wallpaper Engine 本体在 Linux 上通过 Proton 运行，**仅用于浏览和订阅壁纸**——它的
+"应用壁纸"功能依赖 Windows 外壳的窗口层级 API，在 Linux 上无法生效。这是原理性限制，
+不是配置问题。真正"应用壁纸"由本方案完成。
+
+### 壁纸下载到哪去了
+
+Steam 把创意工坊内容放在 Steam 库目录下：
+
+```
+<Steam库>/steamapps/workshop/content/431960/<壁纸ID>/
+                                    ├── project.json   ← 标题、类型
+                                    └── preview.jpg    ← 预览图
+```
+
+其中 `431960` 就是 Wallpaper Engine 的 appid。`<Steam库>` 的位置取决于你的安装方式：
+
+| Steam 安装方式 | 库目录常见位置 |
+|---|---|
+| Ubuntu 官方 deb（steam-installer） | `~/.steam/debian-installation` |
+| 传统 `~/.steam` 布局 | `~/.steam/steam`、`~/.local/share/Steam` |
+| Flatpak | `~/.var/app/com.valvesoftware.Steam/.local/share/Steam` |
+| Snap | `~/snap/steam/common/.local/share/Steam` |
+
+**如果你把 Steam 库放在了别的硬盘上**（比如 `/mnt/games/SteamLibrary`），也不用特殊处理——
+本方案会读取 Steam 的 `libraryfolders.vdf` 配置文件，把注册过的库全部找出来。
+
+### 不确定自己的路径？跑一下这个
+
+```bash
+python3 lwe_paths.py report
+```
+
+它会打印出探测到的 Steam 库、壁纸目录（含数量）、assets 目录和渲染器路径。例如：
+
+```
+Steam 根目录 / 库：
+  /home/user/.steam/debian-installation
+
+创意工坊壁纸目录：
+  /home/user/.steam/debian-installation/steamapps/workshop/content/431960（42 张）
+
+Wallpaper Engine assets：
+  /home/user/.steam/debian-installation/steamapps/common/wallpaper_engine/assets
+
+渲染器：
+  /home/user/linux-wallpaperengine/build/output/linux-wallpaperengine（存在）
+```
+
+如果它找错了，或者你有特殊布局，用环境变量显式指定即可（见下方「目录与自动探测」）。
+
 ## 环境要求
 
 | 项目 | 要求 |
 |---|---|
-| 桌面环境 | GNOME Shell 45–50（本方案在 **GNOME 46 + Wayland** 上验证通过） |
+| 发行版 | Ubuntu 24.04 或兼容的 Debian 系（`install.sh` 用 apt 装依赖） |
+| 桌面环境 | GNOME Shell 45–50 |
 | 会话类型 | **Wayland**（X11 会话下 GNOME 有别的方案，不适用本方案） |
-| 显卡 | 需要 OpenGL 3.3+；NVIDIA 专有驱动可用（本项目在 RTX 4060 上验证） |
-| 其他 | Steam 上已购买 Wallpaper Engine，并订阅了至少一张壁纸 |
-
-Wallpaper Engine 本体在 Linux 上通过 Proton 运行，**仅用于浏览和订阅壁纸**——它的"应用壁纸"功能依赖 Windows 外壳 API，在 Linux 上无法生效（这是原理性限制）。
+| 显卡 | 需要 OpenGL 3.3+，NVIDIA 专有驱动可用 |
+| 磁盘 | 渲染器及其依赖的 CEF 约需 **4 GB**（其中 CEF 解压后约 1.5 GB） |
 
 ## 安装
 
+克隆到**你喜欢的任意位置**（下面的例子用 `~/apps`，换成你自己的路径即可）：
+
 ```bash
-git clone https://github.com/Fitz8863/wallpaper-for-ubuntu.git ~/projects/wallpaper
-cd ~/projects/wallpaper
+mkdir -p ~/apps && cd ~/apps
+git clone https://github.com/Fitz8863/wallpaper-for-ubuntu.git
+cd wallpaper-for-ubuntu
 ./install.sh
 ```
 
+后续所有命令都在这个克隆目录里执行。为方便起见，下面把该目录记为 `$PROJECT`：
+
+```bash
+export PROJECT="$HOME/apps/wallpaper-for-ubuntu"   # 改成你的实际路径
+```
+
 安装脚本会依次：装系统依赖 → 克隆并编译渲染器 → 安装 GNOME 扩展 → 注册应用入口。
+每一步都幂等，重复执行会跳过已完成的部分。也可以分步执行：
+
+```bash
+./install.sh --deps        # 只装系统依赖
+./install.sh --renderer    # 只克隆并编译渲染器
+./install.sh --extension   # 只安装 GNOME 扩展
+./install.sh --desktop     # 只注册应用入口
+```
 
 **首次安装后需要注销并重新登录一次**——Wayland 下 GNOME Shell 无法热加载新扩展。
 
-也可以分步执行：`./install.sh --deps` / `--renderer` / `--extension` / `--desktop`。
+### 关于渲染器和 CEF
 
-### 关于 CEF 下载
-
-编译时会自动下载约 **370MB** 的 CEF（Chromium 嵌入式框架，网页类壁纸需要它）。
-如果卡在下载或报 `Transferred a partial file`：
+渲染器默认编译到 `~/linux-wallpaperengine`，用 `RENDERER_DIR` 可以改：
 
 ```bash
-# 用支持断点续传的方式手动拉取，放到渲染器的 build/cef/ 目录
-URL="https://cef-builds.spotifycdn.com/cef_binary_135.0.17%2Bgcbc1c5b%2Bchromium-135.0.7049.52_linux64_minimal.tar.bz2"
-curl -L -C - --retry 10 "$URL" \
-  -o ~/linux-wallpaperengine/build/cef/$(basename "$URL")
-# 校验通过后删掉半成品解压目录再重跑 cmake
+RENDERER_DIR=~/src/lwe ./install.sh --renderer
 ```
 
-国内网络下大文件容易中途断流，必要时走代理或分段下载。
+编译时会自动下载约 **370MB** 的 CEF（Chromium 嵌入式框架，只有网页类壁纸需要它）。
+如果卡在下载或报 `Transferred a partial file`（大文件在国内网络下容易中途断流）：
+
+```bash
+URL="https://cef-builds.spotifycdn.com/cef_binary_135.0.17%2Bgcbc1c5b%2Bchromium-135.0.7049.52_linux64_minimal.tar.bz2"
+curl -L -C - --retry 10 "$URL" -o "$RENDERER_DIR/build/cef/$(basename "$URL")"
+# 下载完整后删掉半成品的解压目录，再重跑 cmake
+```
 
 ## 使用
 
@@ -76,8 +152,8 @@ curl -L -C - --retry 10 "$URL" \
 在应用列表里搜索「**壁纸选择器**」，或：
 
 ```bash
-python3 ~/projects/wallpaper/wallpaper-picker.py
-python3 ~/projects/wallpaper/wallpaper-picker.py --select 3422875812   # 启动时预选某张
+python3 "$PROJECT/wallpaper-picker.py"
+python3 "$PROJECT/wallpaper-picker.py" --select 3422875812   # 启动时预选某张
 ```
 
 点击任意壁纸卡片即应用；右侧面板显示这张壁纸自己的可调项；右上角「停止」可关闭
@@ -87,6 +163,7 @@ python3 ~/projects/wallpaper/wallpaper-picker.py --select 3422875812   # 启动�
 ### 命令行
 
 ```bash
+cd "$PROJECT"
 ./start-wallpaper.sh --list          # 列出全部壁纸（自动扫描工坊目录）
 ./start-wallpaper.sh 3050160027      # 按 ID 切换
 ./start-wallpaper.sh 芙莉莲           # 按名称关键词切换
@@ -95,20 +172,45 @@ python3 ~/projects/wallpaper/wallpaper-picker.py --select 3422875812   # 启动�
 ./start-wallpaper.sh 3050160027 -f 30 --disable-particles   # 透传渲染器参数
 ```
 
-### 可配置项
+### 显示器名一般不用管
 
-| 环境变量 | 说明 | 默认 |
-|---|---|---|
-| `LWE_BIN` | 渲染器二进制路径 | `~/linux-wallpaperengine/build/output/linux-wallpaperengine` |
-| `LWE_SCREEN` | 显示器名 | `eDP-1` |
-| `LWE_STATE_DIR` | 运行时状态目录（清单/日志/pid） | `~/.cache/wallpaper-picker` |
+渲染器需要知道把画面输出到哪块屏。这不是常量——笔记本内置屏通常叫 `eDP-1`，
+外接显示器可能叫 `HDMI-1`、`DP-1`、`DP-2`……**本方案会向 Mutter 查询当前的主显示器，
+自动填好这个参数**，正常情况下你不需要做任何事。
 
-多显示器用户需要查自己的显示器名：
+只有在自动探测不对时（比如想输出到副屏而不是主屏）才需要手动指定：
 
 ```bash
+# 先看看系统里都有哪些屏
 gdbus call --session --dest org.gnome.Mutter.DisplayConfig \
   --object-path /org/gnome/Mutter/DisplayConfig \
-  --method org.gnome.Mutter.DisplayConfig.GetResources | grep -oP "'[a-zA-Z0-9-]+'"
+  --method org.gnome.Mutter.DisplayConfig.GetResources \
+  | grep -oP "'[a-zA-Z0-9-]+'"
+
+# 再指定要用哪一块
+export LWE_SCREEN="HDMI-1"
+```
+
+想让它永久生效，写进 `~/.profile` 或 `~/.config/environment.d/` 里。
+
+### 目录与自动探测
+
+所有路径都可以用环境变量覆盖，优先级高于自动探测：
+
+| 环境变量 | 作用 | 默认行为 |
+|---|---|---|
+| `LWE_WORKSHOP` | 创意工坊壁纸目录 | 读 Steam 的 `libraryfolders.vdf` 自动找 |
+| `LWE_ASSETS` | Wallpaper Engine 的 `assets` 目录 | 同上，在库里找 `common/wallpaper_engine/assets` |
+| `LWE_BIN` | 渲染器二进制路径 | `~/linux-wallpaperengine/build/output/linux-wallpaperengine` |
+| `LWE_SCREEN` | 显示器名 | 向 Mutter 查询主屏，失败才回落 `eDP-1` |
+| `LWE_STATE_DIR` | 运行时状态目录（壁纸清单/日志/pid） | `~/.cache/wallpaper-picker` |
+
+排查路径问题时：
+
+```bash
+python3 lwe_paths.py report      # 完整报告（库、壁纸、assets、渲染器、显示器）
+python3 lwe_paths.py workshop    # 只打印壁纸目录
+python3 lwe_paths.py screen      # 只打印探测到的主显示器
 ```
 
 ### 配置文件
@@ -155,7 +257,7 @@ gdbus call --session --dest org.gnome.Mutter.DisplayConfig \
 │ linux-wallpaperengine     │  C++ 渲染器，--gnome 模式
 │ （kv9898 fork, gnome 分支）│  渲染到普通 xdg-shell 窗口
 └──────────┬────────────────┘
-           │ 窗口标题编码元数据:  @linux-wallpaperengine!{"monitor":"eDP-1",...}
+           │ 窗口标题编码元数据:  @linux-wallpaperengine!{"monitor":"...",...}
 ┌──────────▼────────────────┐
 │ GNOME Shell 扩展           │  识别窗口 → Clutter.Clone 克隆进背景层
 │ linux-wallpaperengine@... │  并从 Alt+Tab / 概览 / 任务栏隐藏原窗口
@@ -167,17 +269,33 @@ gdbus call --session --dest org.gnome.Mutter.DisplayConfig \
 背景组。这是目前 GNOME Wayland 下唯一可行的路径——任何 GUI 前端都必须能把
 `--gnome` 和 `--screen-root` 透传给渲染器，这也是绝大多数现成前端无法直接套用的原因。
 
+`lwe_paths.py` 是两边的共用模块：图形界面和命令行都通过它解析路径，因此不存在
+"界面找得到、命令行找不到"这类不一致。
+
 ## 已知限制
 
 - **仅 Wayland**。X11 会话下渲染器走的是另一套逻辑，本方案的扩展不起作用。
+- **单显示器**。当前只把画面输出到 `LWE_SCREEN` 指定的那一块屏，多屏需要分别指定。
 - **网页类壁纸可能不稳定**。上游的 CEF 集成仍在修，场景类和视频类壁纸基本没问题。
 - **全屏自动暂停不可用**。渲染器会提示 `Fullscreen detection not supported by your
   Wayland compositor`——Wayland 下没有统一的焦点查询接口。
 - **切换壁纸时控制台会有噪音**。日志出现
   `Object .LWPELiveWallpaper ... has been already disposed` 是扩展清理旧实例时的
   告警，不影响功能。
-- **GPU 占用不低**（场景类壁纸约 40% / 1.5GB 显存），笔记本建议限帧：
-  `-f 30`。
+- **GPU 占用不低**。实测场景类壁纸约 +11W 功耗 / 1.5GB 显存；把帧率上限调到 10
+  可以降到 +5W。这是动态壁纸的固有代价。
+
+## 打包
+
+```bash
+./packaging/build-deb.sh            # 产物在 dist/
+./packaging/build-deb.sh --install  # 构建后直接安装
+./packaging/publish.sh              # 发版：建 Release + 设置仓库信息（需 gh 已登录）
+```
+
+deb 只包含本方案自己这一层（界面 + 脚本 + GNOME 扩展），**不含渲染器**——渲染器必须
+从源码编译，产物 1.5GB（光 `libcef.so` 就 1.3GB），且其 CEF 只有网页类壁纸用得上。
+塞进包会让体积失控，构建期联网抓文件也不符合 Debian 政策。
 
 ## 开发笔记
 
@@ -196,8 +314,7 @@ gdbus call --session --dest org.gnome.Mutter.DisplayConfig \
   只能先建对象再逐个赋值。
 - **免注销验证渲染**：调试时不必每次都注销看效果，用窗口模式直接出图：
   ```bash
-  ./linux-wallpaperengine -w 50x50x1280x720 --bg <ID> \
-      --screenshot /tmp/test.png --screenshot-delay 8
+  "$RENDERER" -w 50x50x1280x720 --bg <ID> --screenshot /tmp/test.png --screenshot-delay 8
   ```
   注意几何格式是 `XxYxWxH`（坐标在前）。
 - **GNOME 截图权限**：`org.gnome.Shell.Screenshot` D-Bus 接口对普通程序返回

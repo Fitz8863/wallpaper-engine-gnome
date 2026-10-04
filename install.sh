@@ -10,7 +10,6 @@
 #
 # 环境变量:
 #   RENDERER_DIR   渲染器源码/构建目录（默认 ~/linux-wallpaperengine）
-#   LWE_SCREEN     显示器名（默认 eDP-1，会写进桌面自启项）
 #
 # 注意：本脚本不调用任何操作 Windows 分区的命令。
 
