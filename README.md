@@ -332,6 +332,10 @@ deb 只包含本方案自己这一层（界面 + 脚本 + GNOME 扩展），**�
 - [Almamu/linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine) — 渲染器主体（GPL-3.0）
 - [kv9898/linux-wallpaperengine](https://github.com/kv9898/linux-wallpaperengine) — `gnome` 分支，提供 `--gnome` 模式与配套扩展（GPL-3.0）
 
+## 参与开发
+
+架构说明、设计决策的来龙去脉、踩过的坑和待办清单都在 [HANDOFF.md](HANDOFF.md)。
+
 ## 许可证
 
 GPL-3.0。本仓库附带 `gnome-extension/` 目录下的第三方代码，来源与许可见该目录的 README。
