@@ -136,6 +136,20 @@ clean_label 同样处理。另：读取失败（超时返回 None）与"没有�
 结果的逻辑一律由 reload() 在扫描完成后消化（preselect 现在挂在 window
 上，reload 尾部处理）。
 
+**CSS aspect-ratio 对 Gtk.Picture 不生效，FlowBox 行高按最小尺寸算**
+网格固定 16:9 卡片时，给 Picture 写 aspect-ratio 无效——Picture 覆写了
+测量函数，只按 paintable 自己算尺寸。做法是子类化 Picture 覆写
+do_measure（AspectPicture）。还有：FlowBox 的行高由子控件的「最小」
+高度决定，do_measure 里最小值返回 0 的话图片会被压成细条——比例高度
+必须同时作为最小值返回。
+
+**壁纸分辨率从哪来（WE 式详情参数）**
+视频 = GStreamer Discoverer（gir1.2-gst-plugins-base-1.0，退 ffprobe）；
+场景 = scene.pkg 是 PKGV 格式（头 + 文件表，见 lwe 排查用的
+`_pkg_largest_tex_dims`），最大 .tex 头部直接带原始宽高，不用解码；
+26 张场景全是 pkg 打包、无散装图片，preview.jpg 是方形营销图不能当
+分辨率用；网页 = 自适应无分辨率。
+
 **覆写 `do_shutdown` 做 chain-up 会报 CRITICAL**
 想给应用加收尾钩子（如退出前 flush 设置），覆写 `do_shutdown` 再
 `super().do_shutdown()`，PyGObject 会报 `failed to chain up on ::shutdown`。

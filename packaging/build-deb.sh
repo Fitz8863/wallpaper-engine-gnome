@@ -101,8 +101,9 @@ Version: $VERSION
 Architecture: $ARCH
 Maintainer: Fitz <13725071087@163.com>
 Installed-Size: $SIZE
-Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0 (>= 4.10), gir1.2-adw-1,
- gir1.2-graphene-1.0, gir1.2-gdkpixbuf-2.0, gir1.2-pango-1.0, bsdextrautils
+Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0 (>= 4.12), gir1.2-adw-1,
+ gir1.2-graphene-1.0, gir1.2-gdkpixbuf-2.0, gir1.2-pango-1.0,
+ gir1.2-gst-plugins-base-1.0, bsdextrautils
 Recommends: gnome-shell (>= 45)
 Section: utils
 Priority: optional

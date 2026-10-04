@@ -12,6 +12,7 @@
 命令行参数，因此图形界面和命令行行为一致。
 """
 
+import glob
 import hashlib
 import json
 import os
@@ -109,7 +110,6 @@ CSS = """
 .card-badge { font-size: 0.72em; opacity: 0.6; }
 .thumb {
     border-radius: 8px;
-    /* 完整显示后留边区域和画面本体要有同一个底色，描边才框得住整体 */
     background-color: alpha(currentColor, 0.05);
     /* 描边是必须的：不少壁纸本身就很暗，没有边界会和卡片糊成一片 */
     outline: 1px solid alpha(currentColor, 0.18);
@@ -313,6 +313,113 @@ def scan_wallpapers():
     return found
 
 
+# ------------------------------------------------------------- 分辨率探测
+#
+# 显示壁纸素材的原始分辨率（对齐 Wallpaper Engine 的详情参数）：
+#   视频 = 视频文件本身（GStreamer Discoverer 探测，失败退 ffprobe）
+#   场景 = 包内最大 .tex 纹理头部声明的原始尺寸（PKGV 格式不用解码像素）
+#   网页 = 自适应，无固定分辨率
+
+_RES_CACHE = {}
+
+
+def _pkg_largest_tex_dims(pkg_path):
+    """从 WE 的 PKGV 包里找出最大 .tex 纹理的原始尺寸。
+
+    包结构（与渲染器 PackageParser 一致）：sizedString "PKGV..." 头 +
+    u32 文件数 + 每文件 (sizedString 名字, u32 偏移, u32 长度)。
+    .tex 头部（TextureParser）：9B "TEXV0005\\0" + 9B "TEXI0001\\0" +
+    format/flags/textureWidth/textureHeight/width/height 六个 u32，
+    其中 width/height 是真实图像尺寸（texture 系列是对齐后的尺寸）。
+    """
+    with open(pkg_path, "rb") as fh:
+        def sized():
+            n = int.from_bytes(fh.read(4), "little")
+            return fh.read(n)
+        if not sized().startswith(b"PKGV"):
+            return None
+        count = int.from_bytes(fh.read(4), "little")
+        if count > 200000:
+            return None
+        best = None
+        for _ in range(count):
+            name = sized().decode("utf-8", "replace")
+            off = int.from_bytes(fh.read(4), "little")
+            ln = int.from_bytes(fh.read(4), "little")
+            if name.lower().endswith(".tex") and (best is None or ln > best[1]):
+                best = (off, ln)
+        base = fh.tell()
+
+    if best is None:
+        return None
+    with open(pkg_path, "rb") as fh:
+        fh.seek(base + best[0])
+        head = fh.read(42)
+    if len(head) < 42 or not head.startswith(b"TEXV0005"):
+        return None
+    width = int.from_bytes(head[34:38], "little")
+    height = int.from_bytes(head[38:42], "little")
+    if 0 < width < 100000 and 0 < height < 100000:
+        return width, height
+    return None
+
+
+def _video_dims(path):
+    try:
+        gi.require_version("Gst", "1.0")
+        gi.require_version("GstPbutils", "1.0")
+        from gi.repository import Gst, GstPbutils
+        if not Gst.is_initialized():
+            Gst.init(None)
+        discoverer = GstPbutils.Discoverer.new(10 * Gst.SECOND)
+        info = discoverer.discover_uri(Gst.filename_to_uri(path))
+        for stream in info.get_video_streams():
+            return stream.get_width(), stream.get_height()
+    except Exception:
+        pass
+    # GStreamer 绑定缺失时退回 ffprobe（装了 ffmpeg 才有）
+    try:
+        import shutil
+        if not shutil.which("ffprobe"):
+            return None
+        out = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=10).stdout.strip()
+        width, height = out.split(",")
+        return int(width), int(height)
+    except Exception:
+        return None
+
+
+def wallpaper_resolution(wall):
+    """返回 (宽, 高) 或 None。按 wid 缓存，reload 时清空。"""
+    if wall.wid in _RES_CACHE:
+        return _RES_CACHE[wall.wid]
+    dims = None
+    if wall.wtype == "video":
+        vids = [f for f in glob.glob(os.path.join(wall.dir, "*"))
+                if f.lower().endswith((".mp4", ".webm", ".mkv", ".avi", ".mov"))]
+        if vids:
+            dims = _video_dims(max(vids, key=os.path.getsize))
+    elif wall.wtype == "scene":
+        pkg = os.path.join(wall.dir, "scene.pkg")
+        if os.path.exists(pkg):
+            dims = _pkg_largest_tex_dims(pkg)
+        else:
+            # 散装场景：目录里最大的非 preview 图片就是主素材
+            imgs = [f for f in glob.glob(os.path.join(wall.dir, "*"))
+                    if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp",
+                                           ".bmp", ".gif"))
+                    and not os.path.basename(f).lower().startswith("preview")]
+            if imgs:
+                info = GdkPixbuf.Pixbuf.get_file_info(max(imgs, key=os.path.getsize))
+                if info and info[1] and info[2]:
+                    dims = (info[1], info[2])
+    _RES_CACHE[wall.wid] = dims
+    return dims
+
+
 def running_wallpaper_id():
     try:
         pid = open(PIDFILE).read().strip()
@@ -454,6 +561,30 @@ def fetch_properties(wid):
 
 # ------------------------------------------------------------------ 界面
 
+class AspectPicture(Gtk.Picture):
+    """固定宽高比的 Picture（16:9 网格格子）。
+
+    CSS 的 aspect-ratio 对 Gtk.Picture 不生效——它覆写了测量函数，只按
+    paintable 自己的尺寸算。这里覆写 do_measure 让高度跟随分配到的宽度
+    按比例伸缩，缩略图才能以矩形铺满格子。
+    """
+    __gtype_name__ = "LWPEAspectPicture"
+    RATIO = 16 / 9
+
+    def __init__(self, **kwargs):
+        super().__init__(can_shrink=True, **kwargs)
+
+    def do_measure(self, orientation, for_size):
+        if orientation == Gtk.Orientation.VERTICAL:
+            # 高度是硬约束（最小值=自然值）：FlowBox 按最小尺寸定行高，
+            # 返回 0 的话图片会被压成细条
+            natural = int(for_size / self.RATIO) if for_size > 0 \
+                else int(THUMB * 9 / 16)
+            return natural, natural, -1, -1
+        natural = int(for_size * self.RATIO) if for_size > 0 else THUMB
+        return 0, natural, -1, -1
+
+
 class WallpaperPicker(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="壁纸", default_width=1280,
@@ -471,6 +602,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self._props_cache = {}     # wid -> 属性列表（含空列表），重扫时清空
         self._save_source = None
         self.preselect = None      # --select 参数，reload 扫描完成后消化
+        self._res_token = 0
         self._loading_volume = False   # 回填音量滑块时抑制回调，免得误保存
 
         provider = Gtk.CssProvider()
@@ -733,9 +865,10 @@ class WallpaperPicker(Adw.ApplicationWindow):
     # ---------------------------------------------------------- 数据刷新
 
     def reload(self):
-        # 重扫 = 工坊内容可能变了，两层解码结果都不再可信
+        # 重扫 = 工坊内容可能变了，两层解码结果与分辨率缓存都不再可信
         _THUMB_CACHE.clear()
         self._props_cache.clear()
+        _RES_CACHE.clear()
         self.wallpapers = scan_wallpapers()
         self.current_id = running_wallpaper_id()
         self.populate()
@@ -794,14 +927,13 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if current:
             box.add_css_class("wallpaper-card-current")
 
-        picture = Gtk.Picture(can_shrink=True, css_classes=["thumb"])
-        picture.set_size_request(-1, int(THUMB * 0.60))
+        picture = AspectPicture(css_classes=["thumb"])
         # 解码在后台线程做；回填时卡片可能已被搜索/筛选重建掉，回调里要确认
         if wall.preview:
             get_texture_async(wall.preview, THUMB,
                               lambda tex, w=wall: self._set_card_thumb(w, tex))
-        # CONTAIN 完整显示画面：宁可上下留边，也不把壁纸裁掉一块
-        picture.set_content_fit(Gtk.ContentFit.CONTAIN)
+        # 铺满 16:9 格子（比例不同的壁纸裁边，如 16:10 裁上下）
+        picture.set_content_fit(Gtk.ContentFit.COVER)
         box.append(picture)
 
         title = Gtk.Label(label=wall.title, lines=2,
@@ -844,8 +976,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.split.set_show_sidebar(True)
         self.panel_btn.set_active(True)
         self.sidebar_title.set_title(wall.title)
-        self.subtitle.set_text(
-            f"{TYPE_LABEL.get(wall.wtype, wall.wtype)} · {wall.wid}")
+        self._show_resolution(wall)
         self.preview.set_paintable(None)
         self._preview_token += 1
         token = self._preview_token
@@ -879,6 +1010,39 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if token != self._preview_token or texture is None:
             return
         self.preview.set_paintable(texture)
+
+    def _show_resolution(self, wall):
+        """侧栏副标题带上素材原始分辨率。
+
+        首次探测视频要走 GStreamer 初始化（约几百毫秒），放后台线程，
+        完成后回主线程补上；快速连点用 token 防串台。
+        """
+        def text(res):
+            parts = [TYPE_LABEL.get(wall.wtype, wall.wtype), wall.wid]
+            if res:
+                parts.append(f"{res[0]}×{res[1]}")
+            self.subtitle.set_text(" · ".join(parts))
+
+        if wall.wid in _RES_CACHE:
+            text(_RES_CACHE[wall.wid])
+            return
+        self._res_token += 1
+        token = self._res_token
+
+        def worker():
+            res = wallpaper_resolution(wall)
+            GLib.idle_add(self._set_resolution_text, wall, res, token)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _set_resolution_text(self, wall, res, token):
+        if token != self._res_token or self.selected is not wall:
+            return False
+        parts = [TYPE_LABEL.get(wall.wtype, wall.wtype), wall.wid]
+        if res:
+            parts.append(f"{res[0]}×{res[1]}")
+        self.subtitle.set_text(" · ".join(parts))
+        return False
 
     # ---------------------------------------------------------- 壁纸属性
 
