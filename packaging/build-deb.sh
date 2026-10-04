@@ -25,7 +25,7 @@ else
 fi
 ARCH="all"
 # 发布前改成你的仓库地址（也可以用环境变量覆盖）
-HOMEPAGE="${HOMEPAGE:-https://github.com/Fitz8863/wallpaper-for-ubuntu}"
+HOMEPAGE="${HOMEPAGE:-https://github.com/Fitz8863/wallpaper-engine-gnome}"
 STAGE="$(mktemp -d)"
 OUT="$PROJECT_DIR/dist"
 INSTALL_AFTER="${1:-}"

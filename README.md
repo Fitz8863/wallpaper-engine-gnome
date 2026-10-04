@@ -105,15 +105,15 @@ Wallpaper Engine assets：
 
 ```bash
 mkdir -p ~/apps && cd ~/apps
-git clone https://github.com/Fitz8863/wallpaper-for-ubuntu.git
-cd wallpaper-for-ubuntu
+git clone https://github.com/Fitz8863/wallpaper-engine-gnome.git
+cd wallpaper-engine-gnome
 ./install.sh
 ```
 
 后续所有命令都在这个克隆目录里执行。为方便起见，下面把该目录记为 `$PROJECT`：
 
 ```bash
-export PROJECT="$HOME/apps/wallpaper-for-ubuntu"   # 改成你的实际路径
+export PROJECT="$HOME/apps/wallpaper-engine-gnome"   # 改成你的实际路径
 ```
 
 安装脚本会依次：装系统依赖 → 克隆并编译渲染器 → 安装 GNOME 扩展 → 注册应用入口。

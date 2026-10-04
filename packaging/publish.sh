@@ -15,7 +15,7 @@
 set -eu
 
 PROJECT_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
-REPO="Fitz8863/wallpaper-for-ubuntu"
+REPO="Fitz8863/wallpaper-engine-gnome"
 PACKAGE="wallpaper-engine-gnome"
 
 REPO_DESCRIPTION="在 GNOME (Wayland) 上使用 Wallpaper Engine 创意工坊壁纸：GTK4 图形化选择器 + 命令行启动器 + 配套 GNOME Shell 扩展，绕过 Mutter 不支持 wlr-layer-shell 的限制。"
