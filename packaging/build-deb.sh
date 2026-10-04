@@ -68,11 +68,11 @@ install -m 644 "$PROJECT_DIR/gnome-extension/extension.js" \
                "$PROJECT_DIR/gnome-extension/metadata.json" \
                "$PKG/usr/share/gnome-shell/extensions/linux-wallpaperengine@github.io/"
 
-# ---- 桌面入口 ----
+# ---- 桌面入口（文件名与应用 ID 一致，Dock 才能把运行中的窗口对上图标）----
 sed "s|@PROJECT_DIR@|/usr/lib/$PACKAGE|g" \
-    "$PROJECT_DIR/desktop/wallpaper-picker.desktop" \
-    > "$PKG/usr/share/applications/wallpaper-picker.desktop"
-chmod 644 "$PKG/usr/share/applications/wallpaper-picker.desktop"
+    "$PROJECT_DIR/desktop/io.github.fitz.WallpaperPicker.desktop" \
+    > "$PKG/usr/share/applications/io.github.fitz.WallpaperPicker.desktop"
+chmod 644 "$PKG/usr/share/applications/io.github.fitz.WallpaperPicker.desktop"
 
 # ---- 应用图标 ----
 # PNG 为主（不依赖目标机器的 SVG 加载器），SVG 进 scalable 作矢量源。

@@ -51,7 +51,7 @@ THUMB_DIR = os.path.join(STATE_DIR, "thumbs")
 sys.path.insert(0, ROOT)
 from lwe_paths import find_renderer, find_workshop  # noqa: E402
 from lwe_scan import scan_workshop  # noqa: E402
-from tray import TrayIcon  # noqa: E402
+from tray import ICON_NAME, TrayIcon  # noqa: E402
 
 RENDERER = find_renderer()
 
@@ -654,6 +654,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
                     app = self.get_application()
                     note = Gio.Notification.new("壁纸选择器已最小化到托盘")
                     note.set_body("点击顶栏图标可以随时打开或停止动态壁纸")
+                    note.set_icon(Gio.ThemedIcon.new(ICON_NAME))
                     app.send_notification("tray-hint", note)
                 except Exception:
                     pass

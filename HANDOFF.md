@@ -367,7 +367,9 @@ gh release upload v1.0.0 dist/*.deb --repo <owner>/<repo> --clobber
 - 运行时状态：`~/.cache/wallpaper-picker/`（壁纸清单、日志、pid、settings.json、缩略图缓存 thumbs/）
 - Steam 库：`~/.steam/debian-installation`，42 张壁纸
   （26 场景 + 12 视频 + 3 网页 + 1 无法解析）
-- 应用入口：`~/.local/share/applications/wallpaper-picker.desktop`
+- 应用入口：`~/.local/share/applications/io.github.fitz.WallpaperPicker.desktop`
+  （文件名必须与 GApplication 的应用 ID 一致，Dock/概览才能把运行中的
+  窗口匹配上专属图标）
 - 登录自启：`~/.config/autostart/wallpaper-engine.desktop`
 - GNOME 扩展：`~/.local/share/gnome-shell/extensions/linux-wallpaperengine@github.io`
   → 软链到本仓库的 `gnome-extension/`

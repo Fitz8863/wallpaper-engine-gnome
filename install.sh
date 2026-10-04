@@ -178,10 +178,12 @@ install_desktop() {
     # GNOME Shell 会缓存 .desktop 的内容，原地改写不一定能让它的缓存失效
     # （表现为点了图标没反应，日志里报旧路径不存在）。删除+新建会产生
     # 目录级的文件系统事件，缓存才会刷新。
-    local target="$APPS_DIR/wallpaper-picker.desktop"
+    local target="$APPS_DIR/io.github.fitz.WallpaperPicker.desktop"
     rm -f "$target"
+    # 清掉旧版的桌面文件名（改用应用 ID 命名前的遗留），避免应用列表出现两个入口
+    rm -f "$APPS_DIR/wallpaper-picker.desktop"
     sed "s|@PROJECT_DIR@|$PROJECT_DIR|g" \
-        "$PROJECT_DIR/desktop/wallpaper-picker.desktop" > "$target"
+        "$PROJECT_DIR/desktop/io.github.fitz.WallpaperPicker.desktop" > "$target"
     chmod +x "$target"
     ok "已安装: $target"
 
