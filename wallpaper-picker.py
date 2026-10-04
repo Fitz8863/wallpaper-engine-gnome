@@ -109,6 +109,8 @@ CSS = """
 .card-badge { font-size: 0.72em; opacity: 0.6; }
 .thumb {
     border-radius: 8px;
+    /* 完整显示后留边区域和画面本体要有同一个底色，描边才框得住整体 */
+    background-color: alpha(currentColor, 0.05);
     /* 描边是必须的：不少壁纸本身就很暗，没有边界会和卡片糊成一片 */
     outline: 1px solid alpha(currentColor, 0.18);
     outline-offset: -1px;
@@ -593,7 +595,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
         self.preview = Gtk.Picture(can_shrink=True, height_request=170,
                                    css_classes=["preview-frame"])
-        self.preview.set_content_fit(Gtk.ContentFit.COVER)
+        self.preview.set_content_fit(Gtk.ContentFit.CONTAIN)
         box.append(self.preview)
 
         self.subtitle = Gtk.Label(xalign=0, wrap=True, css_classes=["card-badge"])
@@ -795,7 +797,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if wall.preview:
             get_texture_async(wall.preview, THUMB,
                               lambda tex, w=wall: self._set_card_thumb(w, tex))
-        picture.set_content_fit(Gtk.ContentFit.COVER)
+        # CONTAIN 完整显示画面：宁可上下留边，也不把壁纸裁掉一块
+        picture.set_content_fit(Gtk.ContentFit.CONTAIN)
         box.append(picture)
 
         title = Gtk.Label(label=wall.title, lines=2,
