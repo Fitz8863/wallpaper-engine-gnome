@@ -109,34 +109,12 @@ find_workshop() {
     python3 "$SCRIPT_DIR/lwe_paths.py" workshop 2>/dev/null
 }
 
-# 重新扫描创意工坊目录刷新清单，这样新订阅的壁纸立刻可用
+# 重新扫描创意工坊目录刷新清单，这样新订阅的壁纸立刻可用。
+# 扫描逻辑在 lwe_scan.py（与图形界面共用同一份实现，排序和格式只维护一份）。
 refresh_list() {
     local ws
     ws="$(find_workshop)" || { echo "找不到创意工坊目录，请确认 Steam 里已订阅壁纸" >&2; return 1; }
-    python3 - "$ws" "$LIST" <<'PY'
-import glob, json, os, sys
-
-ws, out = sys.argv[1], sys.argv[2]
-rows = []
-for d in sorted(glob.glob(os.path.join(ws, '*/'))):
-    pj = os.path.join(d, 'project.json')
-    if not os.path.exists(pj):
-        continue
-    wid = os.path.basename(d.rstrip('/'))
-    try:
-        meta = json.load(open(pj, encoding='utf-8-sig'))
-        rows.append((str(meta.get('type', '?')).lower(), wid,
-                     str(meta.get('title', '?')).strip()))
-    except Exception:
-        rows.append(('error', wid, '(配置无法解析)'))
-
-order = {'scene': 0, 'video': 1, 'web': 2}
-rows.sort(key=lambda r: (order.get(r[0], 9), r[2]))
-with open(out, 'w', encoding='utf-8') as fh:
-    for wtype, wid, title in rows:
-        fh.write(f'{wid}\t{wtype}\t{title}\n')
-print(f'扫描到 {len(rows)} 张壁纸')
-PY
+    python3 "$SCRIPT_DIR/lwe_scan.py" "$ws" "$LIST" >&2
 }
 
 case "${1:-}" in

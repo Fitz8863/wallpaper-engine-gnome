@@ -12,7 +12,6 @@
 命令行参数，因此图形界面和命令行行为一致。
 """
 
-import glob
 import json
 import os
 import re
@@ -44,9 +43,11 @@ STATE_DIR = os.environ.get(
 PIDFILE = os.path.join(STATE_DIR, "wallpaper.pid")
 SETTINGS_FILE = os.path.join(STATE_DIR, "settings.json")
 
-# 路径探测与 start-wallpaper.sh 共用同一份实现，避免两边行为不一致
+# 路径探测与壁纸扫描都和 start-wallpaper.sh 共用同一份实现，
+# 避免两边行为不一致
 sys.path.insert(0, ROOT)
 from lwe_paths import find_renderer, find_workshop  # noqa: E402
+from lwe_scan import scan_workshop  # noqa: E402
 
 RENDERER = find_renderer()
 
@@ -213,25 +214,14 @@ def scan_wallpapers():
     if workshop is None:
         return []
     found = []
-    for path in sorted(glob.glob(os.path.join(workshop, "*/"))):
-        pj = os.path.join(path, "project.json")
-        if not os.path.exists(pj):
-            continue
-        wid = os.path.basename(path.rstrip("/"))
-        try:
-            meta = json.load(open(pj, encoding="utf-8-sig"))
-            title = str(meta.get("title", wid)).strip()
-            wtype = str(meta.get("type", "?")).lower()
-        except Exception:
-            title, wtype = f"{wid}（配置无法解析）", "?"
+    for wtype, wid, title in scan_workshop(workshop):
+        path = os.path.join(workshop, wid)
         preview = ""
         for name in ("preview.jpg", "preview.png", "preview.gif"):
             if os.path.exists(os.path.join(path, name)):
                 preview = os.path.join(path, name)
                 break
         found.append(Wallpaper(wid, wtype, title, preview, path))
-    order = {"scene": 0, "video": 1, "web": 2}
-    found.sort(key=lambda w: (order.get(w.wtype, 9), w.title))
     return found
 
 
