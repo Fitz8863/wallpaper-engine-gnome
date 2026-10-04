@@ -14,9 +14,13 @@ set -eu
 
 PROJECT_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 PACKAGE="wallpaper-engine-gnome"
-# Debian 要求版本号以数字开头，所以没有 tag 时不能直接用提交哈希
+# Debian 要求版本号以数字开头，所以没有 tag 时不能直接用提交哈希。
+# 可用 VERSION=1.0.0 显式指定——例如 tag 之后只有非功能性改动，
+# 想重建同一个版本的包（重命名仓库、改文档之类）。
 BASE_VERSION="1.0.0"
-if TAG="$(cd "$PROJECT_DIR" && git describe --tags --exact-match 2>/dev/null)"; then
+if [ -n "${VERSION:-}" ]; then
+    : # 沿用调用方指定的版本号
+elif TAG="$(cd "$PROJECT_DIR" && git describe --tags --exact-match 2>/dev/null)"; then
     VERSION="${TAG#v}"
 elif HASH="$(cd "$PROJECT_DIR" && git rev-parse --short HEAD 2>/dev/null)"; then
     VERSION="${BASE_VERSION}+git$(date +%Y%m%d).${HASH}"
