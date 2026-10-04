@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# 运行时产物
+# 正常情况下这些会写到 ~/.cache/wallpaper-picker/，这里兜底防止误提交
+wallpapers.txt
+wallpaper.log
+wallpaper.pid
+
+# 渲染器源码与构建产物属于外部依赖，不进本仓库
+# （由 install.sh 克隆到 ~/linux-wallpaperengine 并编译）
+linux-wallpaperengine/
+build/
+cef/
+
+# 打包与测试产物
+*.AppImage
+squashfs-root/
