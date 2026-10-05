@@ -35,6 +35,7 @@ from gi.repository import (  # noqa: E402
 ROOT = os.path.dirname(os.path.realpath(__file__))
 HOME = os.path.expanduser("~")
 SCRIPT = os.path.join(ROOT, "start-wallpaper.sh")
+PICKER = os.path.join(ROOT, "wallpaper-picker.py")
 AUTOSTART = f"{HOME}/.config/autostart/wallpaper-engine.desktop"
 EXT_UUID = "linux-wallpaperengine@github.io"
 
@@ -85,6 +86,9 @@ DEFAULT_SETTINGS = {
     "mouse": True,
     "automute": True,
     "properties": {},
+    # 应用行为
+    "autostart": True,       # 开机自动启动（登录恢复上次的壁纸并常驻托盘）
+    "last": None,            # 上次应用的壁纸 ID，登录自启恢复用
 }
 
 # 值是字典的键，读盘时要单独处理，不能直接覆盖
@@ -139,11 +143,27 @@ def load_settings():
     data = dict(DEFAULT_SETTINGS)
     for key in NESTED_SETTINGS:
         data[key] = {}          # 别和 DEFAULT_SETTINGS 共享同一个字典对象
+    if not os.path.exists(SETTINGS_FILE):
+        return data             # 全新安装：没有任何历史偏好可迁移
     try:
         with open(SETTINGS_FILE, encoding="utf-8") as fh:
             disk = json.load(fh)
     except Exception:
         return data
+
+    # 旧版本迁移：autostart 键按自启文件是否存在推断——老版本没有这个开关，
+    # 手动删过自启文件的用户视为关闭，不能擅自恢复；last 从旧版自启文件的
+    # Exec（start-wallpaper.sh <id>）里提取。
+    if "autostart" not in disk:
+        data["autostart"] = os.path.exists(AUTOSTART)
+    if "last" not in disk and os.path.exists(AUTOSTART):
+        try:
+            with open(AUTOSTART, encoding="utf-8") as fh:
+                m = re.search(r"start-wallpaper\.sh\s+(\d+)", fh.read())
+            if m:
+                data["last"] = m.group(1)
+        except OSError:
+            pass
 
     # 旧版本只有一个全局 volume，迁移成逐壁纸的兜底值
     if "volume" in disk and "volume_default" not in disk:
@@ -1387,7 +1407,11 @@ class WallpaperPicker(Adw.ApplicationWindow):
                 self.update_status()
                 return False
             self.current_id = wall.wid
-            self.write_autostart(wall.wid)
+            self.settings["last"] = wall.wid
+            if self.settings.get("autostart", True):
+                self.write_autostart()
+            else:
+                self.remove_autostart()
             self.update_highlight()      # 原地更新，不重建网格（否则滚动条跳顶）
             self.update_status()
             self.apply_btn.set_sensitive(False)
@@ -1433,7 +1457,11 @@ class WallpaperPicker(Adw.ApplicationWindow):
         except OSError:
             pass
 
-    def write_autostart(self, wid):
+    def write_autostart(self):
+        """写登录自启：启动选择器本体（托盘常驻），由它延迟恢复上次的壁纸。
+
+        旧版这里只启动渲染器，登录后壁纸虽然有了但托盘/后台服务不存在。
+        """
         try:
             os.makedirs(os.path.dirname(AUTOSTART), exist_ok=True)
             with open(AUTOSTART, "w", encoding="utf-8") as fh:
@@ -1441,13 +1469,48 @@ class WallpaperPicker(Adw.ApplicationWindow):
                     "[Desktop Entry]\n"
                     "Type=Application\n"
                     "Name=Wallpaper Engine 动态壁纸\n"
-                    "Comment=linux-wallpaperengine 渲染器\n"
-                    f'Exec=bash -c "sleep 5; {SCRIPT} {wid}"\n'
+                    "Comment=壁纸选择器后台服务，登录后恢复上次的壁纸\n"
+                    f'Exec=bash -c "sleep 5; {PICKER} --restore"\n'
+                    "Icon=io.github.fitz.WallpaperPicker\n"
                     "X-GNOME-Autostart-enabled=true\n"
                     "NoDisplay=false\n"
                     "Terminal=false\n")
         except Exception:
             pass
+
+    def ensure_autostart(self):
+        """启动时自愈：开了自启但文件缺失或还是旧格式时，重写成新格式。"""
+        if not self.settings.get("autostart", True):
+            return
+        try:
+            content = ""
+            if os.path.exists(AUTOSTART):
+                with open(AUTOSTART, encoding="utf-8") as fh:
+                    content = fh.read()
+            if "--restore" in content:
+                return
+            if self.settings.get("last"):
+                self.write_autostart()
+        except Exception:
+            pass
+
+    def set_autostart(self, enabled):
+        """开机自启开关（设置对话框）。"""
+        self.settings["autostart"] = enabled
+        self.schedule_save()
+        if enabled:
+            self.write_autostart()
+        else:
+            self.remove_autostart()
+
+    def restore_last(self):
+        """登录/启动时恢复上次的壁纸（settings["last"]）。"""
+        last = self.settings.get("last")
+        wall = next((w for w in self.wallpapers if w.wid == str(last)), None) \
+            if last else None
+        if wall is not None:
+            self.apply(wall, quiet=True)
+        return False
 
     def update_status(self):
         total = len(self.wallpapers)
@@ -1463,7 +1526,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
 
 class PickerApp(Adw.Application):
-    def __init__(self, snapshot_path=None, preselect=None):
+    def __init__(self, snapshot_path=None, preselect=None, restore=False):
         # 正常运行是单实例（重复启动唤起已运行的窗口，托盘软件的标配）；
         # snapshot 模式保持 NON_UNIQUE，便于应用正在运行时也能出开发截图
         flags = Gio.ApplicationFlags.NON_UNIQUE if snapshot_path \
@@ -1472,6 +1535,8 @@ class PickerApp(Adw.Application):
                          flags=flags)
         self.snapshot_path = snapshot_path
         self.preselect = preselect
+        self.restore_mode = restore   # 开机自启路径：不弹窗，只进托盘
+        self._activated = False
         # 用信号而不是覆写 do_shutdown：PyGObject 里对 shutdown vfunc
         # 做 chain-up 会报 "failed to chain up" 的 CRITICAL
         self.connect("shutdown", self._on_shutdown)
@@ -1484,6 +1549,8 @@ class PickerApp(Adw.Application):
 
     def do_activate(self):
         window = self.props.active_window or WallpaperPicker(self)
+        first = not self._activated
+        self._activated = True
         if self.snapshot_path:
             # 开发截图时用更高的画布、并展开折叠区，方便一次看全
             window.set_default_size(1280, 1400)
@@ -1491,9 +1558,16 @@ class PickerApp(Adw.Application):
         elif window.tray is None:
             # 托盘只在正常运行时挂（snapshot 模式挂了也是徒增注册噪音）
             window.init_tray()
+        window.ensure_autostart()
         # 预选交给 reload() 消化：此时壁纸清单还没扫描，立刻 select 找不到对象
         window.preselect = self.preselect
-        window.present()
+        if self.restore_mode and first and not self.snapshot_path:
+            # 开机自启：不弹窗口，等会话就绪后恢复上次的壁纸；
+            # 之后用户再启动本应用走的是上面的 present 分支
+            # （snapshot 是开发调试模式，必须 present 才能出图）
+            GLib.timeout_add_seconds(5, window.restore_last)
+        else:
+            window.present()
         if self.snapshot_path:
             GLib.timeout_add(2500, self._snapshot, window)
 
@@ -1530,4 +1604,7 @@ if __name__ == "__main__":
         index = sys.argv.index("--select")
         select = sys.argv[index + 1]
         del sys.argv[index:index + 2]
-    sys.exit(PickerApp(shot, select).run(sys.argv))
+    restore = "--restore" in sys.argv
+    if restore:
+        sys.argv.remove("--restore")
+    sys.exit(PickerApp(shot, select, restore).run(sys.argv))
