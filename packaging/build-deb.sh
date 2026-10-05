@@ -49,6 +49,9 @@ install -m 755 "$PROJECT_DIR/wallpaper-picker.py" "$PKG/usr/lib/$PACKAGE/"
 install -m 755 "$PROJECT_DIR/start-wallpaper.sh"  "$PKG/usr/lib/$PACKAGE/"
 install -m 755 "$PROJECT_DIR/lwe_paths.py"        "$PKG/usr/lib/$PACKAGE/"
 install -m 755 "$PROJECT_DIR/lwe_scan.py"         "$PKG/usr/lib/$PACKAGE/"
+install -m 755 "$PROJECT_DIR/i18n.py"             "$PKG/usr/lib/$PACKAGE/"
+install -m 755 "$PROJECT_DIR/settings_dialog.py"  "$PKG/usr/lib/$PACKAGE/"
+install -m 755 "$PROJECT_DIR/tray.py"             "$PKG/usr/lib/$PACKAGE/"
 install -m 755 "$PROJECT_DIR/packaging/enable-extension.py" "$PKG/usr/lib/$PACKAGE/"
 
 # 命令行入口

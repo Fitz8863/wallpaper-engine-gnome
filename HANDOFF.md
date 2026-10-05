@@ -306,8 +306,14 @@ python3 lwe_paths.py screen      # 只打印探测到的主显示器
 | 层 | 内容 | 存储 |
 |---|---|---|
 | 全局 | 静音、帧率上限、缩放模式、自动静音、粒子/视差/鼠标 | `settings.json` 顶层 |
+| 应用行为 | `autostart` 开机自启、`last` 上次壁纸、`restore_on_start`、`close_action`、`language` | `settings.json` 顶层 |
 | 逐壁纸（我们的） | **音量** | `settings.json` 的 `volumes{壁纸ID: 值}` |
 | 逐壁纸（作者定义） | 壁纸自己的可调项 | `settings.json` 的 `properties{壁纸ID: {...}}` |
+
+应用行为细节：登录自启的入口是选择器本体（`--restore`，不弹窗、托盘常驻、
+5 秒后恢复 `last`）；`autostart` 键对老用户按自启文件是否存在推断迁移，
+`last` 从旧自启文件的 Exec 提取；语言层在 i18n.py（中文原文为 key 的 tr()
+字典），切换重启生效。
 
 音量之所以是逐壁纸的，是因为官方 Wallpaper Engine 就这么做（每张壁纸记住自己的
 音量，静音则分全局/逐显示器/托盘三层）。`volume_default` 只作为没单独设过时的
@@ -342,6 +348,9 @@ python3 lwe_paths.py screen      # 只打印探测到的主显示器
 | `91a3575` / `c0565b3` | 专属应用图标（cairo 生成，PNG 分发）；桌面文件改用应用 ID 命名，Dock/应用网格/托盘/通知四处图标统一 |
 | `048ef8b` | 顶栏托盘图标（纯 Gio 实现 SNI）、点 ✕ 最小化到托盘、单实例（详见「系统集成」坑） |
 | `73d324e` | README 记录 v4 复杂场景壁纸兼容性限制；起草上游 issue（docs/upstream-issue-draft.md，已发布 kv9898#7） |
+| `7124589` | 登录自启重构：入口改为选择器本体（--restore，托盘常驻+恢复上次壁纸），settings 增 autostart/last，旧文件迁移 |
+| `3d2390d` | 设置对话框（顶栏齿轮 → Adw.PreferencesWindow）：自启/启动恢复/关闭行为/语言/关于；关闭窗口行为可配置 |
+| `cc63b8f` | 中英双语：i18n.py 的 tr() 字典翻译层，全部 UI 文案接入，语言设置重启生效 |
 | `ee614e6` 后续 | 帧率上限从自由滑块改为 WE 式预设下拉（240~1，默认 30），旧版自定义值兼容 |
 
 ## 发布流程
