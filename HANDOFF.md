@@ -233,6 +233,20 @@ Blank Stare 的音乐播放器区域）。补丁 `patches/0002-*.patch`：按语
 import（保留动态 `import()` 调用）。已实测 2897629925 的 SyntaxError 消失、
 pokemon/伊蕾娜回归正常。同类问题（层失效→白块/默认贴图）优先查这里。
 
+**网页壁纸起不来：CEF 在 gnome 分支的集成缺陷（上游问题）**
+
+症状：web 类壁纸「启动成功」却永远没有画面——渲染器进程活着、不崩、
+日志只有 `Running with:` 一行，扩展侧没有 `wallpaper applied`，CEF 子进程
+数为 0。strace 抓到卡点：CEF 初始化时 `/proc/self/cmdline` 读出为空
+（exe 路径解析失败），资源查找回退到编译期记录的 `build/cef/.../Release/`
+去找 `icudtl.dat`（实际在 `Resources/`）→ ENOENT → futex 永久等待。
+给 Release/ 补上指向 Resources 的软链后，CEF 继续往下走但立刻
+SIGTRAP 核心转储，报 `close symbol missing`——CEF 要求主可执行文件
+提供 interposer 符号，而 gnome 分支把全部逻辑编进了
+`liblinux-wallpaperengine-lib.so`（主程序只是链接它的 34KB 壳）。
+修复需要动渲染器构建/代码，属上游范畴；本地软链补丁只是把「静默卡死」
+变成「显式崩溃」，不解决问题。上游 issues 无同类报告，可提 issue。
+
 ### 构建
 
 **CEF 下载断流**
