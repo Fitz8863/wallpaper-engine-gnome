@@ -19,7 +19,7 @@ gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gio, GLib, GdkPixbuf
 
-from i18n import tr
+from .i18n import tr
 
 SNI_PATH = "/StatusNotifierItem"
 MENU_PATH = "/StatusNotifierMenu"
@@ -202,9 +202,10 @@ class TrayIcon:
                 candidates.append(f.get_path())
         except Exception:
             pass
-        repo_png = os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                                "icons", "hicolor", "64x64", "apps",
-                                f"{ICON_NAME}.png")
+        # 仓库根是包目录的上一级（icons/ 在根，不在包内）
+        repo_png = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+            "icons", "hicolor", "64x64", "apps", f"{ICON_NAME}.png")
         candidates.append(repo_png)
         for path in candidates:
             try:

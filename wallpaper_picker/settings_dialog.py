@@ -13,7 +13,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gtk
 
-from i18n import tr
+from .i18n import tr
 
 LANG_KEYS = ["system", "zh", "en"]
 LANG_LABELS = ["跟随系统", "简体中文", "English"]
