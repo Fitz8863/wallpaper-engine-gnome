@@ -14,18 +14,20 @@ set -eu
 
 PROJECT_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 PACKAGE="wallpaper-engine-gnome"
-# Debian 要求版本号以数字开头，所以没有 tag 时不能直接用提交哈希。
-# 可用 VERSION=1.0.0 显式指定——例如 tag 之后只有非功能性改动，
-# 想重建同一个版本的包（重命名仓库、改文档之类）。
-BASE_VERSION="1.0.0"
+# 版本的单一来源是 wallpaper_picker/__init__.py 的 APP_VERSION（正则提取，
+# 不 import——打包机不能背上 gi 依赖）。优先级：调用方 VERSION > git tag
+# > APP_VERSION+git日期哈希 > APP_VERSION。
+APP_VERSION="$(sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' \
+    "$PROJECT_DIR/wallpaper_picker/__init__.py")"
+[ -n "$APP_VERSION" ] || APP_VERSION="1.1.0"
 if [ -n "${VERSION:-}" ]; then
-    : # 沿用调用方指定的版本号
+    : # 沿用调用方指定的版本号（例如 tag 后只有文档改动，重建同版本包）
 elif TAG="$(cd "$PROJECT_DIR" && git describe --tags --exact-match 2>/dev/null)"; then
     VERSION="${TAG#v}"
 elif HASH="$(cd "$PROJECT_DIR" && git rev-parse --short HEAD 2>/dev/null)"; then
-    VERSION="${BASE_VERSION}+git$(date +%Y%m%d).${HASH}"
+    VERSION="${APP_VERSION}+git$(date +%Y%m%d).${HASH}"
 else
-    VERSION="$BASE_VERSION"
+    VERSION="$APP_VERSION"
 fi
 ARCH="all"
 # 发布前改成你的仓库地址（也可以用环境变量覆盖）
@@ -45,13 +47,13 @@ mkdir -p "$PKG/DEBIAN" "$PKG/usr/bin" "$PKG/usr/lib/$PACKAGE" \
          "$PKG/usr/share/doc/$PACKAGE"
 
 # ---- 程序本体 ----
+# 整包目录安装：逐文件 install 曾漏过新增模块（deb 起不来），
+# 包化后直接拷目录，新模块自动进包。__pycache__ 不进 deb。
 install -m 755 "$PROJECT_DIR/wallpaper-picker.py" "$PKG/usr/lib/$PACKAGE/"
 install -m 755 "$PROJECT_DIR/start-wallpaper.sh"  "$PKG/usr/lib/$PACKAGE/"
-install -m 755 "$PROJECT_DIR/lwe_paths.py"        "$PKG/usr/lib/$PACKAGE/"
-install -m 755 "$PROJECT_DIR/lwe_scan.py"         "$PKG/usr/lib/$PACKAGE/"
-install -m 755 "$PROJECT_DIR/i18n.py"             "$PKG/usr/lib/$PACKAGE/"
-install -m 755 "$PROJECT_DIR/settings_dialog.py"  "$PKG/usr/lib/$PACKAGE/"
-install -m 755 "$PROJECT_DIR/tray.py"             "$PKG/usr/lib/$PACKAGE/"
+cp -r "$PROJECT_DIR/wallpaper_picker" "$PKG/usr/lib/$PACKAGE/"
+rm -rf "$PKG/usr/lib/$PACKAGE/wallpaper_picker/__pycache__"
+find "$PKG/usr/lib/$PACKAGE/wallpaper_picker" -name "*.py" -exec chmod 755 {} +
 install -m 755 "$PROJECT_DIR/packaging/enable-extension.py" "$PKG/usr/lib/$PACKAGE/"
 
 # 命令行入口
@@ -123,6 +125,13 @@ EOF
 cat > "$PKG/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e
+
+# v1 的 deb 把模块平铺在 /usr/lib/wallpaper-engine-gnome/ 下，v2 起收进
+# wallpaper_picker/ 包目录。升级时清掉旧散装文件，避免同名模块残留。
+LEGACY_DIR=/usr/lib/wallpaper-engine-gnome
+for f in i18n.py tray.py settings_dialog.py lwe_paths.py lwe_scan.py wallpaper-picker.py; do
+    [ -f "$LEGACY_DIR/$f" ] && rm -f "$LEGACY_DIR/$f" || true
+done
 
 # 把扩展加入「发起安装的那个用户」的启用列表。
 # 只在能确定用户身份时动手，否则留一句提示，不擅自改别人的配置。
