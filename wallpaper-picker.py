@@ -98,6 +98,11 @@ SCALING_CHOICES = [
     ("stretch", "拉伸（可能变形）"),
 ]
 
+# 帧率上限用预设下拉（对齐 Wallpaper Engine 的 Performance 设置），
+# 不给自由滑块——桌面背景跑上百帧纯属浪费电。30 是 WE 的默认推荐值；
+# 旧版本存过预设之外的自定义值时，会作为"自定义"项出现在列表里。
+FPS_PRESETS = [240, 165, 144, 120, 90, 60, 45, 30, 25, 20, 15, 10, 8, 5, 1]
+
 CSS = """
 .wallpaper-card {
     border-radius: 12px;
@@ -806,10 +811,9 @@ class WallpaperPicker(Adw.ApplicationWindow):
                                           lambda v: self.set_global("silent", v))
         self.settings_expander.add_row(self.row_silent)
 
-        self.row_fps = self.slider_row("帧率上限", 10, 144, 1,
-                                       self.settings["fps"],
-                                       lambda v: self.set_global("fps", int(v)),
-                                       suffix=" fps")
+        self.row_fps = self.combo_row(
+            "帧率上限", self._fps_choices(), self.settings["fps"],
+            lambda v: self.set_global("fps", int(v)))
         self.settings_expander.add_row(self.row_fps)
         self.update_fps_hint()   # 先给个通用说明，选中壁纸后会换成针对性的
 
@@ -894,6 +898,14 @@ class WallpaperPicker(Adw.ApplicationWindow):
         row = Adw.ActionRow(title=title)
         row.add_suffix(dropdown)
         return row
+
+    def _fps_choices(self):
+        """帧率下拉选项：预设值 + 旧版可能存过的自定义值。"""
+        values = list(FPS_PRESETS)
+        if self.settings["fps"] not in values:
+            values.append(self.settings["fps"])
+        values.sort(reverse=True)
+        return [(v, f"{v} fps" + ("（默认）" if v == 30 else "")) for v in values]
 
     # ---------------------------------------------------------- 数据刷新
 
