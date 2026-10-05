@@ -233,19 +233,30 @@ Blank Stare 的音乐播放器区域）。补丁 `patches/0002-*.patch`：按语
 import（保留动态 `import()` 调用）。已实测 2897629925 的 SyntaxError 消失、
 pokemon/伊蕾娜回归正常。同类问题（层失效→白块/默认贴图）优先查这里。
 
-**网页壁纸起不来：CEF 在 gnome 分支的集成缺陷（上游问题）**
+**网页壁纸起不来：CEF 三层问题（上游范畴，已推进两层）**
 
-症状：web 类壁纸「启动成功」却永远没有画面——渲染器进程活着、不崩、
-日志只有 `Running with:` 一行，扩展侧没有 `wallpaper applied`，CEF 子进程
-数为 0。strace 抓到卡点：CEF 初始化时 `/proc/self/cmdline` 读出为空
-（exe 路径解析失败），资源查找回退到编译期记录的 `build/cef/.../Release/`
-去找 `icudtl.dat`（实际在 `Resources/`）→ ENOENT → futex 永久等待。
-给 Release/ 补上指向 Resources 的软链后，CEF 继续往下走但立刻
-SIGTRAP 核心转储，报 `close symbol missing`——CEF 要求主可执行文件
-提供 interposer 符号，而 gnome 分支把全部逻辑编进了
-`liblinux-wallpaperengine-lib.so`（主程序只是链接它的 34KB 壳）。
-修复需要动渲染器构建/代码，属上游范畴；本地软链补丁只是把「静默卡死」
-变成「显式崩溃」，不解决问题。上游 issues 无同类报告，可提 issue。
+症状：web 类壁纸「启动成功」却永远没有画面——进程活着、无报错、无 CEF
+子进程、`OnPaint` 从未触发。分层调查结论（完整证据见
+`docs/upstream-issue-web-cef.md`，已起草上游 issue）：
+
+1. **资源路径回退失效**（已修，渲染器源码里）：chromium 重写自身 cmdline
+   后资源探测失败，回退到编译期 `build/cef/.../Release/` 找 `icudtl.dat`
+   （实际在 `Resources/`）→ `futex` 永久卡死。修法 = 显式从
+   `/proc/self/exe` 设置 `resources_dir_path`/`locales_dir_path`/
+   `browser_subprocess_path`。
+2. **sandbox 的 close() interposer 崩溃**（已修，同上）：`CEF_NO_SANDBOX`
+   没有任何地方定义，sandbox 初始化（AdjustOOMScore）里 interposed
+   `close()` 解析不到原始符号 → `ImmediateCrash`（SIGTRAP）。
+   修法 = 无条件 `settings.no_sandbox = true`。
+3. **仍未出画**：以上修复 + `--disable-gpu` + multi_threaded_message_loop
+   后，`CefInitialize` 依然挂起，且 `strace` 证明全程零 spawn、零
+   socketpair——没有任何 CEF 子进程被创建，浏览器构建流程未开始。
+   属 CEF 135 + Wayland/NVIDIA 的深层问题，等待上游输入。
+
+渲染器源码里的实验性改动（WebBrowserContext.cpp / BrowserApp.cpp /
+CWeb.cpp）**未固化为 patches/0003**——web 尚未跑通，且改动未全部验证；
+视频/场景壁纸已回归验证不受影响。后续：上游回应后继续，或深挖
+CefInitialize 挂起点（gdb 异步 interrupt + 全线程 bt 是下一步手段）。
 
 ### 构建
 
