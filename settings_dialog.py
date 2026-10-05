@@ -3,6 +3,8 @@
 三页：应用行为（自启/启动恢复/关闭窗口行为）、语言、关于。
 所有改动即时持久化（复用 picker.settings + schedule_save 基建）；
 界面语言的切换在重启应用后生效。
+
+窗口形态：独立非模态窗口（不锁主窗口输入，关闭只是隐藏、实例复用）。
 """
 
 import gi
@@ -24,9 +26,13 @@ class SettingsDialog(Adw.PreferencesWindow):
         self._picker = picker
         s = picker.settings
         self.set_transient_for(picker)
+        # 不用模态：模态会锁住主窗口输入，一旦交互异常整个应用就像卡死。
+        # 非模态下它是一个独立窗口，主界面随时可以继续操作。
+        self.set_modal(False)
         self.set_title(tr("设置"))
         self.set_default_size(560, 480)
-        self.set_modal(True)
+        # 点 X 是隐藏而不是销毁：实例被主窗口缓存复用，关闭再开不重建
+        self.connect("close-request", self._on_close)
 
         # ---- 应用行为 ----
         app_page = Adw.PreferencesPage()
@@ -95,6 +101,10 @@ class SettingsDialog(Adw.PreferencesWindow):
         self.add(app_page)
         self.add(lang_page)
         self.add(about_page)
+
+    def _on_close(self, *_args):
+        self.hide()
+        return True
 
     def _show_about(self, repo_url):
         about = Adw.AboutWindow(transient_for=self)
