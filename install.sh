@@ -94,17 +94,19 @@ install_renderer() {
     git -C "$RENDERER_DIR" submodule update --init --recursive \
         || warn "部分子模块拉取失败（网络原因），可重试"
 
-    # 应用本地补丁（patches/ 下）。补丁已应用或与上游版本不匹配时自动跳过。
-    # 0001 修的是：Mutter 会把 gnome 模式的窗口约束在工作区内
-    # （2560 屏上只给 2464x1546），扩展克隆拉伸后壁纸整体发虚。
+    # 应用本地补丁（patches/ 下）。用 --reverse --check 区分「已经打过」
+    # （反向 check 通过）与「和当前源码不匹配」（正反都失败）——上游更新
+    # 后不适配的补丁不能静默跳过，那会让已修复的渲染缺陷悄悄回来。
     for patch in "$PROJECT_DIR"/patches/*.patch; do
         [ -e "$patch" ] || continue
         if git -C "$RENDERER_DIR" apply --check "$patch" 2>/dev/null; then
             git -C "$RENDERER_DIR" apply "$patch" \
                 && ok "已应用渲染器补丁: $(basename "$patch")" \
                 || warn "渲染器补丁应用失败: $(basename "$patch")"
-        else
+        elif git -C "$RENDERER_DIR" apply --reverse --check "$patch" 2>/dev/null; then
             ok "渲染器补丁已应用，跳过: $(basename "$patch")"
+        else
+            warn "渲染器补丁与当前源码版本不匹配，跳过: $(basename "$patch")"
         fi
     done
 
@@ -236,10 +238,9 @@ case "$STEP" in
         echo "       $PROJECT_DIR/start-wallpaper.sh --list"
         echo "       $PROJECT_DIR/start-wallpaper.sh <壁纸ID或名称>"
         echo
-        echo "多显示器用户请用下面的命令查出显示器名，再设置 LWE_SCREEN:"
-        echo "  gdbus call --session --dest org.gnome.Mutter.DisplayConfig \\"
-        echo "    --object-path /org/gnome/Mutter/DisplayConfig \\"
-        echo "    --method org.gnome.Mutter.DisplayConfig.GetResources | grep -oP \"'[A-Za-z0-9-]+'\""
+        echo "多显示器用户请先查出显示器名（LWE_SCREEN 环境变量指定，"
+        echo "当前主屏可用下面命令确认）:"
+        echo "  $PROJECT_DIR/wallpaper_picker/paths.py screen"
         ;;
     *)
         die "未知参数: $STEP（用 --help 查看用法）"

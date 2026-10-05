@@ -95,7 +95,8 @@ else
         --notes "$(cat <<EOF
 ## 安装
 
-下载下方的 \`${PACKAGE}_${VERSION}_all.deb\`，然后：
+下载下方的 `${PACKAGE}_${VERSION}_amd64_linux.deb` 附件（dpkg 不挑文件名，
+以 `_amd64_linux` 结尾的纯 Python 包用 dpkg -i 安装没有问题），然后：
 
 \`\`\`bash
 sudo dpkg -i ./${PACKAGE}_${VERSION}_amd64_linux.deb
