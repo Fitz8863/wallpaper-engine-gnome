@@ -70,6 +70,8 @@ const LiveWallpaper = GObject.registerClass({
         this._backgroundActor = backgroundActor;
         this._monitorIndex = backgroundActor.monitor;
         this._wallpaper = null;
+        this._cloneSource = null;
+        this._sourceDestroyId = 0;
         this._retryId = 0;
         this._destroying = false;
 
@@ -93,31 +95,10 @@ const LiveWallpaper = GObject.registerClass({
         const operation = () => {
             if (this._destroying) return GLib.SOURCE_REMOVE;
 
-            // Detect when the current clone's source has gone stale
-            const cloneSource = this._wallpaper?.get_source?.();
-            const sourceAlive = cloneSource && !this._isActorDisposed(cloneSource);
-
-            if (!sourceAlive && this._wallpaper) {
-                // Old renderer window is gone — tear down the clone
-                this._wallpaper.destroy();
-                this._wallpaper = null;
-                log(`lwpe: renderer gone on monitor ${this._monitorIndex}`);
-            }
-
             if (!this._wallpaper) {
                 const source = this._getSource();
                 if (source) {
-                    this._wallpaper = new Clutter.Clone({
-                        source,
-                        pivot_point: new Graphene.Point({x: 0.5, y: 0.5}),
-                    });
-                    this._wallpaper.connect('destroy', () => {
-                        this._wallpaper = null;
-                    });
-                    this._wallpaper.set_size(this._monitorWidth, this._monitorHeight);
-                    this.add_child(this._wallpaper);
-                    this._fade();
-                    log(`lwpe: wallpaper applied on monitor ${this._monitorIndex}`);
+                    this._attachClone(source);
                 } else if (_firstRun) {
                     log(`lwpe: no renderer yet for monitor ${this._monitorIndex}, retrying...`);
                 }
@@ -133,16 +114,49 @@ const LiveWallpaper = GObject.registerClass({
         this._retryId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, operation);
     }
 
-    /**
-     * Safely check whether a GObject actor has been disposed.
-     */
-    _isActorDisposed(actor) {
-        try {
-            // Accessing any property on a disposed object throws
-            void actor.get_parent?.();
-            return false;
-        } catch (e) {
-            return true;
+    _attachClone(source) {
+        const clone = new Clutter.Clone({
+            source,
+            pivot_point: new Graphene.Point({x: 0.5, y: 0.5}),
+        });
+        this._cloneSource = source;
+        // Renderer windows are torn down by C code, which only emits the
+        // destroy signal — no JS hook runs.  React to it here and detach
+        // the clone right away; the next poll tick attaches the new
+        // window.  Without this we'd have to poll-detect the stale source,
+        // and every probe of a disposed actor logs a GJS warning.
+        this._sourceDestroyId = source.connect('destroy', () => {
+            this._sourceDestroyId = 0;
+            this._cloneSource = null;
+            this._clearClone();
+            log(`lwpe: renderer gone on monitor ${this._monitorIndex}`);
+        });
+        clone.connect('destroy', () => {
+            this._wallpaper = null;
+        });
+        clone.set_size(this._monitorWidth, this._monitorHeight);
+        this.add_child(clone);
+        this._wallpaper = clone;
+        this._fade();
+        log(`lwpe: wallpaper applied on monitor ${this._monitorIndex}`);
+    }
+
+    _clearClone() {
+        // The source destroy callback resets both ids before calling us,
+        // so a live disconnect only happens on teardown paths.
+        if (this._sourceDestroyId && this._cloneSource) {
+            try {
+                this._cloneSource.disconnect(this._sourceDestroyId);
+            } catch (e) {
+                // source already disposed
+            }
+        }
+        this._sourceDestroyId = 0;
+        this._cloneSource = null;
+        if (this._wallpaper) {
+            const clone = this._wallpaper;
+            this._wallpaper = null;
+            clone.destroy();
         }
     }
 
@@ -239,18 +253,20 @@ const LiveWallpaper = GObject.registerClass({
         });
     }
 
-    destroy() {
+    // vfunc, not a JS destroy() override: C-side teardown (Mutter
+    // destroying the background group, BackgroundManager cleanup) only
+    // emits the destroy signal and never calls a JS method.  A JS
+    // override would miss it, leaving the retry timer running on a
+    // disposed object — the "LWPELiveWallpaper ... already disposed"
+    // log spam on every wallpaper change came from exactly that.
+    vfunc_destroy() {
         this._destroying = true;
         if (this._retryId) {
             GLib.source_remove(this._retryId);
             this._retryId = 0;
         }
-        if (this._wallpaper) {
-            this._wallpaper.destroy();
-            this._wallpaper = null;
-        }
-
-        super.destroy();
+        this._clearClone();
+        super.vfunc_destroy();
     }
 });
 
@@ -258,6 +274,8 @@ class ManagedWindow {
     constructor(window) {
         this._window = window;
         this._signals = [];
+        this._actor = null;
+        this._actorDestroyId = 0;
         this._surfaceContainer = null;
         this._surfacePositionId = 0;
         this._states = {
@@ -306,6 +324,15 @@ class ManagedWindow {
         // may remove minimized actors from get_window_actors().
         const actor = this._window.get_compositor_private?.();
         if (actor) {
+            this._actor = actor;
+            // LiveWallpaper's _getSource fallback visits every cached
+            // actor each poll tick; a disposed one would log a GJS
+            // warning on every visit, so drop it the moment it dies.
+            this._actorDestroyId = actor.connect('destroy', () => {
+                _rendererActors.delete(actor);
+                this._actor = null;
+                this._actorDestroyId = 0;
+            });
             _rendererActors.add(actor);
         }
 
@@ -385,6 +412,22 @@ class ManagedWindow {
             }
         }
 
+        // Drop the cached actor.  If the actor died first its destroy
+        // callback already cleared both fields — don't touch it again,
+        // disconnecting on a disposed actor would itself log a warning.
+        if (this._actor) {
+            _rendererActors.delete(this._actor);
+            if (this._actorDestroyId) {
+                try {
+                    this._actor.disconnect(this._actorDestroyId);
+                } catch (e) {
+                    // actor already disposed
+                }
+            }
+            this._actor = null;
+            this._actorDestroyId = 0;
+        }
+
         this._signals.forEach(signal => {
             try {
                 this._window.disconnect(signal);
@@ -451,12 +494,9 @@ class WindowManager {
     _clearWindow(window) {
         if (!window.lwpeManaged) return;
 
-        // Remove cached actor when the window is unmapped
-        const actor = window.get_compositor_private?.();
-        if (actor) {
-            _rendererActors.delete(actor);
-        }
-
+        // The cached MetaWindowActor is dropped inside disconnect();
+        // looking it up via get_compositor_private() here would return
+        // null (or a disposed actor) once the window is going away.
         window.disconnect(window.lwpeUnmanagedId);
         window.lwpeManaged.disconnect();
         window.lwpeManaged = null;
