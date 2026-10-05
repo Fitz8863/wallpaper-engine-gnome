@@ -20,13 +20,19 @@
 ## 目录结构
 
 ```
-wallpaper-picker.py     GTK4 + libadwaita 图形选择器（主程序，约 1100 行）
+wallpaper-picker.py     根目录薄启动壳（desktop/自启 Exec 都指向它，转发进包）
+wallpaper_picker/       应用 Python 包（deb 整目录安装）
+  __init__.py           只放 APP_VERSION —— 单一版本源（零 import，
+                        build-deb.sh 用 sed 提取，不能背 gi 依赖）
+  picker.py             GTK4 + libadwaita 主程序（约 1700 行）
+  paths.py              路径与显示器探测（纯 stdlib，shell 按路径直调）
+  scan.py               创意工坊扫描：清单解析+排序（纯 stdlib，同上）
+  i18n.py  tray.py  settings_dialog.py
 start-wallpaper.sh      命令行启动器：参数解析、进程管理、自启
-lwe_paths.py            路径与显示器探测（被上面两者共用）
-lwe_scan.py             创意工坊扫描：清单解析+排序（被上面两者共用）
+tests/                  pytest 纯逻辑层测试（36 例，不需要显示环境）
 install.sh              一键安装：系统依赖 → 编译渲染器 → 装扩展 → 注册入口
 packaging/
-  build-deb.sh          构建 deb（只打包本项目这一层）
+  build-deb.sh          构建 deb（整目录安装包，版本取自 __init__.py）
   publish.sh            发版：建 GitHub Release + 设置仓库信息
   enable-extension.py   deb 安装/卸载时增删 GNOME 扩展启用项
 gnome-extension/        配套 GNOME Shell 扩展（GPL-3.0 第三方代码，见其 README）
@@ -69,7 +75,7 @@ wallpaper-picker.py ──调用──▶ start-wallpaper.sh ──启动──�
 `kv9898` 的 `gnome` 分支加了 `--gnome` 模式（改用 xdg-shell 窗口）和配套扩展。
 上游至今未合并。这是目前 GNOME Wayland 下唯一可行的路径。
 
-**2. 为什么有 `lwe_paths.py` 这个独立模块**
+**2. 为什么有 `paths.py` 这个独立模块**
 图形界面和命令行都需要"壁纸在哪、显示器叫什么"，早期两边各写了一份硬编码列表，
 必然会出现"界面找得到、命令行找不到"的不一致。现在两边都调这个模块。
 它还负责解析 Steam 的 `libraryfolders.vdf`——**这是让 Steam 库装在别的硬盘上也能
@@ -289,9 +295,9 @@ tail -f ~/.cache/wallpaper-picker/wallpaper.log   # 渲染器输出
 ### 路径排查
 
 ```bash
-python3 lwe_paths.py report      # 完整报告：库、壁纸目录、assets、渲染器、显示器
-python3 lwe_paths.py workshop    # 只打印壁纸目录
-python3 lwe_paths.py screen      # 只打印探测到的主显示器
+python3 wallpaper_picker/paths.py report      # 完整报告：库、壁纸目录、assets、渲染器、显示器
+python3 wallpaper_picker/paths.py workshop    # 只打印壁纸目录
+python3 wallpaper_picker/paths.py screen      # 只打印探测到的主显示器
 ```
 
 ## 当前状态与待办

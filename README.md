@@ -92,7 +92,7 @@ Steam 把创意工坊内容放在 Steam 库目录下：
 ### 不确定自己的路径？跑一下这个
 
 ```bash
-python3 lwe_paths.py report
+python3 wallpaper_picker/paths.py report
 ```
 
 它会打印出探测到的 Steam 库、壁纸目录（含数量）、assets 目录和渲染器路径。例如：
@@ -239,9 +239,9 @@ export LWE_SCREEN="HDMI-1"
 排查路径问题时：
 
 ```bash
-python3 lwe_paths.py report      # 完整报告（库、壁纸、assets、渲染器、显示器）
-python3 lwe_paths.py workshop    # 只打印壁纸目录
-python3 lwe_paths.py screen      # 只打印探测到的主显示器
+python3 wallpaper_picker/paths.py report      # 完整报告（库、壁纸、assets、渲染器、显示器）
+python3 wallpaper_picker/paths.py workshop    # 只打印壁纸目录
+python3 wallpaper_picker/paths.py screen      # 只打印探测到的主显示器
 ```
 
 ### 配置文件
@@ -310,7 +310,7 @@ python3 lwe_paths.py screen      # 只打印探测到的主显示器
 背景组。这是目前 GNOME Wayland 下唯一可行的路径——任何 GUI 前端都必须能把
 `--gnome` 和 `--screen-root` 透传给渲染器，这也是绝大多数现成前端无法直接套用的原因。
 
-`lwe_paths.py` 是两边的共用模块：图形界面和命令行都通过它解析路径，因此不存在
+`wallpaper_picker/paths.py` 是两边的共用模块：图形界面和命令行都通过它解析路径，因此不存在
 "界面找得到、命令行找不到"这类不一致。
 
 ## 已知限制

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """路径探测 —— 找出 Steam 库、创意工坊壁纸和渲染器在哪里。
 
-被 wallpaper-picker.py 和 start-wallpaper.sh 共用，保证两边行为一致。
+被 wallpaper_picker/picker.py 和 start-wallpaper.sh 共用，保证两边行为一致。
 
 查找顺序（先看环境变量，再自动探测）：
 

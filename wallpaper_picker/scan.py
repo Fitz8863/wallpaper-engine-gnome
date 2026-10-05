@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""扫描创意工坊壁纸清单 —— wallpaper-picker.py 与 start-wallpaper.sh 共用。
+"""扫描创意工坊壁纸清单 —— 包内 picker 与 start-wallpaper.sh 共用。
 
 两边都需要「遍历工坊目录、读 project.json、按类型和标题排序」，过去各写了
 一份，改格式或排序时很容易只改一边，出现「界面里有的壁纸 --list 里没有」
@@ -8,7 +8,7 @@
 命令行用法（start-wallpaper.sh 调用，写 TSV 清单）:
     python3 lwe_scan.py <workshop目录> <输出文件>
 
-Python 调用（wallpaper-picker.py 使用）:
+Python 调用（wallpaper_picker.picker 使用）:
     from lwe_scan import scan_workshop
 """
 
