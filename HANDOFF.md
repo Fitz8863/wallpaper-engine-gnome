@@ -224,6 +224,15 @@ Wayland 普通窗口不允许盖住 Dock/顶栏，实测 2560x1600 屏上 config
 `WAYLAND_DEBUG=client ./start-wallpaper.sh <ID>` 抓 Wayland 协议日志，
 看 `xdg_toplevel.configure` 的数值——Release 版没有 debug 日志开关，这是唯一入口。
 
+**壁纸层脚本的 import 语句会让整层失效（White block 类问题）**
+新版工坊壁纸的层脚本带 `import * as WEMath from 'WEMath'` 这类 ES 模块语句。
+ScriptEngine 把模块脚本压平成 IIFE 普通脚本时剥离了 `'use strict'` 和 `export `，
+但漏了 `import` 语句——裸 `import` 在 IIFE 里是 SyntaxError，整层脚本失效，
+脚本控制的可见性/着色全部回落默认（表现为大块白色贴图，如 2897629925
+Blank Stare 的音乐播放器区域）。补丁 `patches/0002-*.patch`：按语句边界剥离
+import（保留动态 `import()` 调用）。已实测 2897629925 的 SyntaxError 消失、
+pokemon/伊蕾娜回归正常。同类问题（层失效→白块/默认贴图）优先查这里。
+
 ### 构建
 
 **CEF 下载断流**

@@ -1,0 +1,46 @@
+diff --git a/src/WallpaperEngine/Scripting/ScriptEngine.cpp b/src/WallpaperEngine/Scripting/ScriptEngine.cpp
+index 1479aeb..032e789 100644
+--- a/src/WallpaperEngine/Scripting/ScriptEngine.cpp
++++ b/src/WallpaperEngine/Scripting/ScriptEngine.cpp
+@@ -737,6 +737,37 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
+ 	body.erase (pos, 7);
+     }
+ 
++    // Newer WE wallpapers import shared libraries (e.g. `import * as WEMath
++    // from 'WEMath'`). Those statements only compile as ES modules — after
++    // the module wrapper strips `export `, a leftover bare `import` throws
++    // SyntaxError and kills the whole layer script. Strip them like the
++    // other module syntax. `import("...")` dynamic calls must survive, so
++    // only match the statement form at a statement boundary.
++    while ((pos = body.find ("import ")) != std::string::npos) {
++	size_t lineStart = body.rfind ('\n', pos);
++	lineStart = (lineStart == std::string::npos) ? 0 : lineStart + 1;
++	bool statementStart = true;
++	for (size_t i = lineStart; i < pos; i++) {
++	    if (!isspace (static_cast<unsigned char> (body[i]))) {
++		statementStart = false;
++		break;
++	    }
++	}
++	size_t end = pos + 7;
++	bool dynamicCall = false;
++	for (size_t i = end; i < body.size (); i++) {
++	    if (isspace (static_cast<unsigned char> (body[i]))) continue;
++	    dynamicCall = (body[i] == '(');
++	    break;
++	}
++	if (statementStart && !dynamicCall) {
++	    size_t eol = body.find ('\n', pos);
++	    body.erase (pos, (eol == std::string::npos ? body.size () : eol) - pos);
++	} else {
++	    body.erase (pos, 7);
++	}
++    }
++
+     // The IIFE gives every layer its own closure for top-level vars and
+     // functions, so two layers that both define `function update()` or a
+     // top-level `var scriptProperties` don't clobber each other. Lifecycle
+---
+上游可提 PR：本补丁基于 gnome 分支 6d7d838。渲染器仓库本地提交 9fbd435
+（fix(ScriptEngine): strip import statements when flattening WE scripts）。
+配套：patches/0001（fullscreen）与本补丁可同时应用。
