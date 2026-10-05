@@ -55,7 +55,7 @@ THUMB_DIR = os.path.join(STATE_DIR, "thumbs")
 # i18n._LANG 等模块级状态就会分裂（表现为托盘/对话框翻译静默失效）
 from . import i18n  # noqa: E402
 from .i18n import tr  # noqa: E402
-from .paths import find_renderer, find_workshop  # noqa: E402
+from .paths import find_renderer, find_workshop, wallpaper_bg_arg  # noqa: E402
 from .scan import scan_workshop  # noqa: E402
 from .settings_dialog import SettingsDialog  # noqa: E402
 from .tray import ICON_NAME, TrayIcon  # noqa: E402
@@ -592,7 +592,7 @@ def fetch_properties(wid):
         return []
     try:
         out = subprocess.run(
-            [RENDERER, "--bg", wid, "--list-properties"],
+            [RENDERER, "--bg", wallpaper_bg_arg(wid), "--list-properties"],
             capture_output=True, text=True, timeout=60)
     except Exception:
         return None

@@ -160,6 +160,25 @@ def find_workshop():
     return _steam_workshop_detected()
 
 
+def wallpaper_bg_arg(wid):
+    """渲染器 --bg 参数的实际传值。
+
+    Steam 订阅壁纸传 ID（渲染器自己能按 ID 找到）；自定义目录里的壁纸
+    传完整路径（渲染器 translateBackground 对含 / 的值按文件路径处理，
+    纯数字才回 Steam 工坊找——自定义壁纸按 ID 传会失败，或读到 Steam 里
+    同 ID 另一张壁纸的属性）。判定逻辑与 start-wallpaper.sh 保持一致，
+    两处改动要同步。
+    """
+    steam_ws = find_steam_workshop()
+    if steam_ws and os.path.isdir(os.path.join(steam_ws, wid)):
+        return wid
+    workshop = find_workshop()
+    if workshop and workshop != steam_ws \
+            and os.path.isdir(os.path.join(workshop, wid)):
+        return os.path.join(workshop, wid)
+    return wid
+
+
 def find_assets():
     """返回 Wallpaper Engine 本体的 assets 目录（渲染器需要，用于场景壁纸）。"""
     override = os.environ.get("LWE_ASSETS")

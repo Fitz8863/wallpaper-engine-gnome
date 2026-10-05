@@ -79,3 +79,33 @@ def test_scan_accepts_non_numeric_dirnames(tmp_path):
 def test_settings_default_has_workshop_key(picker_mod):
     s = picker_mod.load_settings()
     assert s["workshop"] is None
+
+
+# ---- wallpaper_bg_arg：--bg 传 ID 还是完整路径（fetch_properties 与
+# start-wallpaper.sh 共用的判定语义）----
+
+def test_bg_arg_steam_wallpaper_uses_id(picker_mod, tmp_path, monkeypatch):
+    """目录在 Steam 工坊下 → 传 ID，渲染器自己能找到。"""
+    # 构造 <root>/steamapps/workshop/content/431960 布局
+    real_steam = tmp_path / "steam-layout" / "steamapps" / "workshop" \
+        / "content" / paths.APP_ID
+    real_steam.mkdir(parents=True)
+    wall = real_steam / "99999"
+    wall.mkdir()
+    (wall / "project.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(paths, "STEAM_ROOTS", [str(tmp_path / "steam-layout")])
+    monkeypatch.setattr(paths, "FALLBACK_WORKSHOP", [])
+    assert paths.wallpaper_bg_arg("99999") == "99999"
+
+
+def test_bg_arg_custom_wallpaper_uses_path(picker_mod, tmp_path, monkeypatch):
+    _isolate_detection(monkeypatch)
+    ws = make_workshop(tmp_path)
+    write_settings(picker_mod, {"workshop": str(ws)})
+    assert paths.wallpaper_bg_arg("my-cool-wall") == str(ws / "my-cool-wall")
+
+
+def test_bg_arg_unknown_id_falls_back_to_id(picker_mod, tmp_path, monkeypatch):
+    """两边都找不到时维持 ID 原样，让渲染器报出有针对性的错误。"""
+    _isolate_detection(monkeypatch)
+    assert paths.wallpaper_bg_arg("12345") == "12345"
