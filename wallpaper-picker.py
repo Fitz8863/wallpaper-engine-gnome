@@ -53,6 +53,8 @@ THUMB_DIR = os.path.join(STATE_DIR, "thumbs")
 # 路径探测与壁纸扫描都和 start-wallpaper.sh 共用同一份实现，
 # 避免两边行为不一致
 sys.path.insert(0, ROOT)
+import i18n  # noqa: E402
+from i18n import tr  # noqa: E402
 from lwe_paths import find_renderer, find_workshop  # noqa: E402
 from lwe_scan import scan_workshop  # noqa: E402
 from settings_dialog import SettingsDialog  # noqa: E402
@@ -620,7 +622,7 @@ class AspectPicture(Gtk.Picture):
 
 class WallpaperPicker(Adw.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="壁纸", default_width=1280,
+        super().__init__(application=app, title=tr("壁纸"), default_width=1280,
                          default_height=820)
         self.settings = load_settings()
         self.wallpapers = []
@@ -658,7 +660,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
         # 窗口先显示再填数据：扫描、建卡片都挪到 idle 里，
         # present() 之前的阻塞从几百毫秒降到几乎为零
-        self.status.set_text("正在扫描壁纸…")
+        self.status.set_text(tr("正在扫描壁纸…"))
         GLib.idle_add(self.reload)
 
         self.tray = None
@@ -686,8 +688,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
                 self._tray_hint_shown = True
                 try:
                     app = self.get_application()
-                    note = Gio.Notification.new("壁纸选择器已最小化到托盘")
-                    note.set_body("点击顶栏图标可以随时打开或停止动态壁纸")
+                    note = Gio.Notification.new(tr("壁纸选择器已最小化到托盘"))
+                    note.set_body(tr("点击顶栏图标可以随时打开或停止动态壁纸"))
                     note.set_icon(Gio.ThemedIcon.new(ICON_NAME))
                     app.send_notification("tray-hint", note)
                 except Exception:
@@ -701,33 +703,33 @@ class WallpaperPicker(Adw.ApplicationWindow):
         view = Adw.ToolbarView()
         header = Adw.HeaderBar()
 
-        self.search = Gtk.SearchEntry(placeholder_text="搜索壁纸…",
+        self.search = Gtk.SearchEntry(placeholder_text=tr("搜索壁纸…"),
                                       width_chars=24)
         self.search.connect("search-changed", lambda *_: self.populate())
         header.set_title_widget(self.search)
 
         refresh = Gtk.Button(icon_name="view-refresh-symbolic",
-                             tooltip_text="重新扫描壁纸")
+                             tooltip_text=tr("重新扫描壁纸"))
         refresh.connect("clicked", lambda *_: self.reload())
         header.pack_start(refresh)
 
-        self.stop_btn = Gtk.Button(label="停止", css_classes=["destructive-action"])
+        self.stop_btn = Gtk.Button(label=tr("停止"), css_classes=["destructive-action"])
         self.stop_btn.connect("clicked", self.on_stop)
         header.pack_end(self.stop_btn)
 
         self.panel_btn = Gtk.ToggleButton(icon_name="sidebar-show-symbolic",
-                                          tooltip_text="显示/隐藏属性面板")
+                                          tooltip_text=tr("显示/隐藏属性面板"))
         self.panel_btn.connect("toggled",
                                lambda b: self.split.set_show_sidebar(b.get_active()))
         header.pack_end(self.panel_btn)
 
         # 切换壁纸需要一两秒（要停掉旧渲染器再起新的），期间转个圈给个交代
-        self.spinner = Gtk.Spinner(tooltip_text="正在切换壁纸…")
+        self.spinner = Gtk.Spinner(tooltip_text=tr("正在切换壁纸…"))
         self.spinner.set_visible(False)
         header.pack_end(self.spinner)
 
         self.settings_btn = Gtk.Button(icon_name="emblem-system-symbolic",
-                                       tooltip_text="设置")
+                                       tooltip_text=tr("设置"))
         self.settings_btn.connect("clicked", self.on_settings_clicked)
         header.pack_end(self.settings_btn)
         view.add_top_bar(header)
@@ -735,17 +737,17 @@ class WallpaperPicker(Adw.ApplicationWindow):
         # 扩展检查是个子进程调用，放后台线程，别拖慢窗口出现；
         # 确认缺了才亮出提示，避免所有用户都看到横幅闪一下
         self.warn = Adw.Banner(
-            title="GNOME 扩展还没被加载：请注销后重新登录一次，动态壁纸才会显示到桌面上",
+            title=tr("GNOME 扩展还没被加载：请注销后重新登录一次，动态壁纸才会显示到桌面上"),
             revealed=False)
-        self.warn.set_button_label("知道了")
+        self.warn.set_button_label(tr("知道了"))
         view.add_top_bar(self.warn)
         threading.Thread(target=self._check_extension, daemon=True).start()
 
         self.chips = Gtk.Box(spacing=6, margin_top=10, margin_bottom=4,
                              margin_start=14, margin_end=14)
         group = None
-        for label, key in (("全部", ""), ("场景", "scene"),
-                           ("视频", "video"), ("网页", "web")):
+        for label, key in ((tr("全部"), ""), (tr("场景"), "scene"),
+                           (tr("视频"), "video"), (tr("网页"), "web")):
             btn = Gtk.ToggleButton(label=label,
                                    active=(key == ""), css_classes=["flat"])
             btn.connect("toggled", self.on_filter_toggled, key)
@@ -790,10 +792,10 @@ class WallpaperPicker(Adw.ApplicationWindow):
         view = Adw.ToolbarView()
         header = Adw.HeaderBar()
 
-        self.sidebar_title = Adw.WindowTitle(title="未选择壁纸")
+        self.sidebar_title = Adw.WindowTitle(title=tr("未选择壁纸"))
         header.set_title_widget(self.sidebar_title)
 
-        apply_btn = Gtk.Button(label="应用", css_classes=["suggested-action"])
+        apply_btn = Gtk.Button(label=tr("应用"), css_classes=["suggested-action"])
         apply_btn.connect("clicked", lambda *_: self.apply(self.selected))
         self.apply_btn = apply_btn
         header.pack_end(apply_btn)
@@ -814,12 +816,12 @@ class WallpaperPicker(Adw.ApplicationWindow):
         box.append(Gtk.Separator())
 
         # ---- 壁纸属性（逐壁纸，放最前面：这才是属性面板的主角）----
-        self.props_header = self.section_title("壁纸属性")
+        self.props_header = self.section_title(tr("壁纸属性"))
         box.append(self.props_header)
         self.props_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         box.append(self.props_box)
         self.props_hint = Gtk.Label(
-            label="选中壁纸后这里会列出它自己的可调项",
+            label=tr("选中壁纸后这里会列出它自己的可调项"),
             xalign=0, wrap=True, css_classes=["empty-hint", "card-badge"])
         self.props_box.append(self.props_hint)
 
@@ -828,10 +830,10 @@ class WallpaperPicker(Adw.ApplicationWindow):
         # ---- 本壁纸设置（我们自己加的逐壁纸项，目前只有音量）----
         # 音量放在这里而不是「播放设置」里，是因为它逐壁纸生效——
         # 位置要跟语义一致，否则用户会以为调一次就全局生效了。
-        own_group = Adw.PreferencesGroup(title="本壁纸设置")
+        own_group = Adw.PreferencesGroup(title=tr("本壁纸设置"))
         box.append(own_group)
         self.row_volume = self.slider_row(
-            "音量", 0, 100, 1, RENDERER_DEFAULT_VOLUME,
+            tr("音量"), 0, 100, 1, RENDERER_DEFAULT_VOLUME,
             self.on_volume_changed, suffix="%")
         self.row_volume.set_sensitive(False)   # 没选中壁纸时不知道音量存给谁
         own_group.add(self.row_volume)
@@ -842,48 +844,50 @@ class WallpaperPicker(Adw.ApplicationWindow):
         box.append(group)
 
         self.settings_expander = Adw.ExpanderRow(
-            title="播放设置", subtitle="全局生效，对所有壁纸都一样")
+            title=tr("播放设置"), subtitle=tr("全局生效，对所有壁纸都一样"))
         group.add(self.settings_expander)
 
-        self.row_silent = self.switch_row("静音", "关闭壁纸产生的所有声音",
+        self.row_silent = self.switch_row(tr("静音"), tr("关闭壁纸产生的所有声音"),
                                           self.settings["silent"],
                                           lambda v: self.set_global("silent", v))
         self.settings_expander.add_row(self.row_silent)
 
         self.row_fps = self.combo_row(
-            "帧率上限", self._fps_choices(), self.settings["fps"],
+            tr("帧率上限"), self._fps_choices(), self.settings["fps"],
             lambda v: self.set_global("fps", int(v)))
         self.settings_expander.add_row(self.row_fps)
         self.update_fps_hint()   # 先给个通用说明，选中壁纸后会换成针对性的
 
-        self.row_scaling = self.combo_row("缩放模式", SCALING_CHOICES,
-                                          self.settings["scaling"],
-                                          lambda v: self.set_global("scaling", v))
+        self.row_scaling = self.combo_row(
+            tr("缩放模式"),
+            [(key, tr(label)) for key, label in SCALING_CHOICES],
+            self.settings["scaling"],
+            lambda v: self.set_global("scaling", v))
         self.settings_expander.add_row(self.row_scaling)
 
         # 对应官方 Performance > Playback 的
         # 「Other application playing audio」从 Mute 改成 Keep running
         self.row_automute = self.switch_row(
-            "其他程序出声时自动静音",
-            "关掉后，你听音乐或看视频时壁纸不会自动静音",
+            tr("其他程序出声时自动静音"),
+            tr("关掉后，你听音乐或看视频时壁纸不会自动静音"),
             self.settings.get("automute", True),
             lambda v: self.set_global("automute", v))
         self.settings_expander.add_row(self.row_automute)
 
         self.row_particles = self.switch_row(
-            "粒子效果", "关闭可降低 GPU 占用",
+            tr("粒子效果"), tr("关闭可降低 GPU 占用"),
             self.settings["particles"],
             lambda v: self.set_global("particles", v))
         self.settings_expander.add_row(self.row_particles)
 
         self.row_parallax = self.switch_row(
-            "视差效果", "跟随鼠标的景深位移",
+            tr("视差效果"), tr("跟随鼠标的景深位移"),
             self.settings["parallax"],
             lambda v: self.set_global("parallax", v))
         self.settings_expander.add_row(self.row_parallax)
 
         self.row_mouse = self.switch_row(
-            "鼠标交互", "允许壁纸响应鼠标位置",
+            tr("鼠标交互"), tr("允许壁纸响应鼠标位置"),
             self.settings["mouse"],
             lambda v: self.set_global("mouse", v))
         self.settings_expander.add_row(self.row_mouse)
@@ -944,7 +948,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if self.settings["fps"] not in values:
             values.append(self.settings["fps"])
         values.sort(reverse=True)
-        return [(v, f"{v} fps" + ("（默认）" if v == 30 else "")) for v in values]
+        return [(v, f"{v} fps" + (tr("（默认）") if v == 30 else "")) for v in values]
 
     # ---------------------------------------------------------- 数据刷新
 
@@ -1001,8 +1005,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
         wall = next((w for w in self.wallpapers if w.wid == wid), None)
         if wall is None:
             return ""
-        prefix = "使用中 · " if wid == self.current_id else ""
-        return f"{prefix}{TYPE_LABEL.get(wall.wtype, wall.wtype)}"
+        prefix = tr("使用中 · ") if wid == self.current_id else ""
+        return f"{prefix}{tr(TYPE_LABEL.get(wall.wtype, wall.wtype))}"
 
     def make_card(self, wall):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
@@ -1034,7 +1038,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
         box.append(badge)
 
         button = Gtk.Button(child=box, has_frame=False)
-        button.set_tooltip_text(f"点击应用：{wall.title}")
+        button.set_tooltip_text(tr("点击应用：{}").format(wall.title))
         button.connect("clicked", lambda *_: self.select(wall, apply_now=True))
 
         child = Gtk.FlowBoxChild()
@@ -1067,7 +1071,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if wall.preview:
             get_texture_async(wall.preview, PREVIEW_SIZE,
                               lambda tex, t=token: self._set_preview(tex, t))
-        self.apply_btn.set_label("使用中" if wall.wid == self.current_id else "应用")
+        self.apply_btn.set_label(
+            tr("使用中") if wall.wid == self.current_id else tr("应用"))
         if not self.switching:
             self.apply_btn.set_sensitive(wall.wid != self.current_id)
         self.load_volume(wall.wid)
@@ -1103,7 +1108,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
         不带分辨率的版本，免得副标题停留在上一张壁纸的文字上。
         """
         def text(res):
-            parts = [TYPE_LABEL.get(wall.wtype, wall.wtype), wall.wid]
+            parts = [tr(TYPE_LABEL.get(wall.wtype, wall.wtype)), wall.wid]
             if res:
                 parts.append(f"{res[0]}×{res[1]}")
             self.subtitle.set_text(" · ".join(parts))
@@ -1124,7 +1129,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
     def _set_resolution_text(self, wall, res, token):
         if token != self._res_token or self.selected is not wall:
             return False
-        parts = [TYPE_LABEL.get(wall.wtype, wall.wtype), wall.wid]
+        parts = [tr(TYPE_LABEL.get(wall.wtype, wall.wtype)), wall.wid]
         if res:
             parts.append(f"{res[0]}×{res[1]}")
         self.subtitle.set_text(" · ".join(parts))
@@ -1149,7 +1154,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
         while (child := self.props_box.get_first_child()) is not None:
             self.props_box.remove(child)
         self.props_box.append(Gtk.Label(
-            label="正在读取该壁纸的可调项…", xalign=0,
+            label=tr("正在读取该壁纸的可调项…"), xalign=0,
             css_classes=["empty-hint", "card-badge"]))
         self.prop_rows = []
 
@@ -1169,15 +1174,15 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
         if props is None:
             self.props_box.append(Gtk.Label(
-                label="属性读取失败（可能超时），重新选中这张壁纸可重试",
+                label=tr("属性读取失败（可能超时），重新选中这张壁纸可重试"),
                 xalign=0, wrap=True, css_classes=["empty-hint", "card-badge"]))
-            self.props_header.set_text("壁纸属性")
+            self.props_header.set_text(tr("壁纸属性"))
             return False
         if not props:
             self.props_box.append(Gtk.Label(
-                label="这张壁纸没有可调项", xalign=0,
+                label=tr("这张壁纸没有可调项"), xalign=0,
                 css_classes=["empty-hint", "card-badge"]))
-            self.props_header.set_text("壁纸属性")
+            self.props_header.set_text(tr("壁纸属性"))
             return False
 
         saved = self.settings["properties"].get(wid, {})
@@ -1196,7 +1201,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
                 self.props_box.append(widget)
                 self.prop_rows.append(widget)
 
-        self.props_header.set_text(f"壁纸属性（{len(self.prop_rows)} 项）")
+        self.props_header.set_text(
+            tr("壁纸属性（{} 项）").format(len(self.prop_rows)))
         return False
 
     def _build_property_widget(self, spec, value):
@@ -1314,7 +1320,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
         silent = bool(self.settings.get("silent"))
         self.row_volume.set_sensitive(self.selected is not None and not silent)
         self.row_volume.set_subtitle(
-            "「静音」已开启，音量不生效" if silent else "")
+            tr("「静音」已开启，音量不生效") if silent else "")
 
     def update_fps_hint(self, wtype=None):
         """帧率上限对不同类型壁纸的效果差别很大，副标题跟着选中的壁纸变。
@@ -1323,7 +1329,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
         """
         if wtype is None and self.selected is not None:
             wtype = self.selected.wtype
-        self.row_fps.set_subtitle(FPS_HINTS.get(wtype or "", FPS_HINT_DEFAULT))
+        self.row_fps.set_subtitle(
+            tr(FPS_HINTS.get(wtype or "", FPS_HINT_DEFAULT)))
 
     def set_property(self, name, value):
         if self.selected is None:
@@ -1415,14 +1422,15 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if wall is None or getattr(self, "switching", False):
             return
         self._flush_save()   # 启动脚本马上要读 settings.json，先落盘
-        self.set_busy(True, f"正在切换：{wall.title} …")
+        self.set_busy(True, tr("正在切换：{} …").format(wall.title))
 
         def done(result):
             self.set_busy(False)
             if result.returncode != 0:
                 detail = (result.stderr or "").strip().splitlines()
                 self.toast_overlay.add_toast(Adw.Toast(
-                    title=f"启动失败：{detail[-1][:100] if detail else '见日志'}"))
+                    title=tr("启动失败：{}").format(
+                        detail[-1][:100] if detail else tr("见日志"))))
                 self.update_status()
                 return False
             self.current_id = wall.wid
@@ -1434,9 +1442,10 @@ class WallpaperPicker(Adw.ApplicationWindow):
             self.update_highlight()      # 原地更新，不重建网格（否则滚动条跳顶）
             self.update_status()
             self.apply_btn.set_sensitive(False)
-            self.apply_btn.set_label("使用中")
+            self.apply_btn.set_label(tr("使用中"))
             if not quiet:
-                self.toast_overlay.add_toast(Adw.Toast(title=f"已应用：{wall.title}"))
+                self.toast_overlay.add_toast(Adw.Toast(
+                    title=tr("已应用：{}").format(wall.title)))
             return False
 
         self.run_script_async([wall.wid], done)
@@ -1446,7 +1455,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
     def stop_wallpaper(self):
         """停止动态壁纸。「停止」按钮与托盘菜单共用。"""
-        self.set_busy(True, "正在停止 …")
+        self.set_busy(True, tr("正在停止 …"))
         self.run_script_async(["--stop"], self._after_stop)
 
     def _after_stop(self, result):
@@ -1454,7 +1463,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if result.returncode != 0:
             detail = (result.stderr or "").strip().splitlines()
             self.toast_overlay.add_toast(Adw.Toast(
-                title=f"停止失败：{detail[-1][:100] if detail else '见日志'}"))
+                title=tr("停止失败：{}").format(
+                    detail[-1][:100] if detail else tr("见日志"))))
             self.update_status()
             return False
         self.current_id = None
@@ -1462,8 +1472,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.update_highlight()
         self.update_status()
         self.apply_btn.set_sensitive(True)
-        self.apply_btn.set_label("应用")
-        self.toast_overlay.add_toast(Adw.Toast(title="已停止动态壁纸"))
+        self.apply_btn.set_label(tr("应用"))
+        self.toast_overlay.add_toast(Adw.Toast(title=tr("已停止动态壁纸")))
         return False
 
     def remove_autostart(self):
@@ -1532,8 +1542,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
     def set_language(self, lang):
         self.settings["language"] = lang
+        i18n.set_language(lang)   # 立即作用于之后创建的控件；完整生效需重启
         self.schedule_save()
-        # 翻译层接入后：i18n.set_language(lang)，重启应用生效
 
     def restore_last(self):
         """登录/启动时恢复上次的壁纸（settings["last"]）。"""
@@ -1549,10 +1559,12 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if self.current_id:
             title = next((w.title for w in self.wallpapers
                           if w.wid == self.current_id), self.current_id)
-            self.status.set_text(f"正在使用：{title}　·　共 {total} 张壁纸")
+            self.status.set_text(
+                tr("正在使用：{}　·　共 {} 张壁纸").format(title, total))
             self.stop_btn.set_sensitive(True)
         else:
-            self.status.set_text(f"当前没有动态壁纸在运行　·　共 {total} 张壁纸")
+            self.status.set_text(
+                tr("当前没有动态壁纸在运行　·　共 {} 张壁纸").format(total))
             # 正在切换时别把「停止」重新启用，否则状态文案会被覆盖
             self.stop_btn.set_sensitive(not self.switching)
 
@@ -1639,4 +1651,5 @@ if __name__ == "__main__":
     restore = "--restore" in sys.argv
     if restore:
         sys.argv.remove("--restore")
+    i18n.set_language(load_settings().get("language", "system"))
     sys.exit(PickerApp(shot, select, restore).run(sys.argv))

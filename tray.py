@@ -19,6 +19,8 @@ gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gio, GLib, GdkPixbuf
 
+from i18n import tr
+
 SNI_PATH = "/StatusNotifierItem"
 MENU_PATH = "/StatusNotifierMenu"
 # 托盘宿主的名字/路径组合，按序尝试。GNOME 的 AppIndicator 扩展持有
@@ -222,7 +224,7 @@ class TrayIcon:
         return {
             "Category": GLib.Variant("s", "ApplicationStatus"),
             "Id": GLib.Variant("s", "wallpaper-picker"),
-            "Title": GLib.Variant("s", "壁纸选择器"),
+            "Title": GLib.Variant("s", tr("壁纸选择器")),
             "Status": GLib.Variant("s", "Active"),
             "WindowId": GLib.Variant("i", 0),
             "IconName": GLib.Variant("s", ICON_NAME),
@@ -232,8 +234,8 @@ class TrayIcon:
             "AttentionIconName": GLib.Variant("s", ""),
             "AttentionIconPixmap": empty_pixmap,
             "ToolTip": GLib.Variant("(sa(iiay)ss)",
-                                    ("壁纸选择器", [], "",
-                                     "Wallpaper Engine 动态壁纸")),
+                                    (tr("壁纸选择器"), [], "",
+                                     tr("Wallpaper Engine 动态壁纸"))),
             "Menu": GLib.Variant("o", MENU_PATH),
             "ItemIsMenu": GLib.Variant("b", True),
         }
@@ -267,7 +269,7 @@ class TrayIcon:
         root_props = {"children-display": GLib.Variant("s", "submenu")}
         children = []
         for item_id, label, _action in MENU_ITEMS:
-            node = (item_id, self._item_props(label), [])
+            node = (item_id, self._item_props(tr(label)), [])
             children.append(GLib.Variant("(ia{sv}av)", node))
         return (0, root_props, children)
 
@@ -296,8 +298,8 @@ class TrayIcon:
             item_id, prop = params.unpack()
             if prop == "label":
                 label = next((l for i, l, _a in MENU_ITEMS if i == item_id), "")
-                invocation.return_value(GLib.Variant("v",
-                                                     GLib.Variant("s", label)))
+                invocation.return_value(
+                    GLib.Variant("v", GLib.Variant("s", tr(label))))
             else:
                 invocation.return_value(GLib.Variant("v", GLib.Variant("s", "")))
         elif name == "Event":
