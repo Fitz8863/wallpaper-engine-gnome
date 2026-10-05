@@ -11,6 +11,6 @@
 （不能 import，否则打包机要背上 gi 依赖），子模块也从这里取版本。
 """
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 __all__ = ["APP_VERSION"]

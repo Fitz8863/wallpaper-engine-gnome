@@ -17,6 +17,8 @@ set -eu
 PROJECT_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 REPO="Fitz8863/wallpaper-engine-gnome"
 PACKAGE="wallpaper-engine-gnome"
+# Release 说明独立成文件：每次发版改这里，不用动本脚本
+NOTES_FILE="$PROJECT_DIR/packaging/release-notes.md"
 
 REPO_DESCRIPTION="在 GNOME (Wayland) 上使用 Wallpaper Engine 创意工坊壁纸：GTK4 图形化选择器 + 命令行启动器 + 配套 GNOME Shell 扩展，绕过 Mutter 不支持 wlr-layer-shell 的限制。"
 REPO_TOPICS="wallpaper-engine gnome wayland gtk4 libadwaita linux ubuntu dynamic-wallpaper"
@@ -52,10 +54,16 @@ if ! gh auth status >/dev/null 2>&1; then
 fi
 ok "gh 已认证"
 
+if [ ! -f "$NOTES_FILE" ]; then
+    die "找不到 Release 说明: $NOTES_FILE
+发版前先按本版本内容更新它（版本号、功能列表）"
+fi
+ok "Release 说明: $NOTES_FILE"
+
 if [ -n "$DRY_RUN" ]; then
     info "dry-run 模式，以下操作不会真的执行："
     echo "  - 构建 $PACKAGE $VERSION 的 deb"
-    echo "  - 创建 Release $TAG 并上传 deb"
+    echo "  - 创建 Release $TAG（说明来自 release-notes.md）并上传 deb"
     echo "  - 设置仓库描述：$REPO_DESCRIPTION"
     echo "  - 设置仓库标签：$REPO_TOPICS"
     exit 0
@@ -92,38 +100,7 @@ else
     gh release create "$TAG" "$RELEASE_ASSET" \
         --repo "$REPO" \
         --title "$TAG" \
-        --notes "$(cat <<EOF
-## 安装
-
-下载下方的 `${PACKAGE}_${VERSION}_amd64_linux.deb` 附件（dpkg 不挑文件名，
-以 `_amd64_linux` 结尾的纯 Python 包用 dpkg -i 安装没有问题），然后：
-
-\`\`\`bash
-sudo dpkg -i ./${PACKAGE}_${VERSION}_amd64_linux.deb
-\`\`\`
-
-**首次安装后需要注销并重新登录一次**——Wayland 下 GNOME Shell 无法热加载新扩展。
-
-## 注意：本包不含渲染器
-
-壁纸的实际渲染由社区渲染器
-[linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine)
-的 GNOME 分支负责，它需要另行编译（构建时会下载约 370MB 的 CEF）。
-详见仓库 README 的安装章节。
-
-## 本版本内容
-
-- 图形化选择器：网格缩略图完整显示壁纸画面，支持搜索、按类型筛选、点击即切换
-- 属性面板：自动读取每张壁纸自己的可调项并生成控件（开关/滑块/下拉/取色器）
-- 逐壁纸音量：每张壁纸记住自己的音量，与官方 Wallpaper Engine 行为一致
-- 播放设置：静音、帧率上限、缩放模式、其他程序出声时自动静音、粒子/视差/鼠标交互
-- 界面性能：缩略图双层缓存 + 异步解码，搜索/筛选/启动不再卡顿
-- 壁纸以屏幕原生分辨率渲染：渲染器窗口申请全屏态，消除被工作区约束
-  造成的整体拉伸发虚（补丁随 install.sh 自动应用）
-- 专属应用图标；停止壁纸会同时撤掉登录自启（界面与命令行一致）
-- 命令行：按 ID / 名称关键词匹配（字面比较，标题带括号不再失配）
-EOF
-)" >/dev/null
+        --notes-file "$NOTES_FILE" >/dev/null
     ok "Release 已创建: https://github.com/$REPO/releases/tag/$TAG"
 fi
 

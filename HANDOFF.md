@@ -373,9 +373,11 @@ python3 wallpaper_picker/paths.py screen      # 只打印探测到的主显示�
 ## 发布流程
 
 ```bash
+# 0. 发版前：升 APP_VERSION（wallpaper_picker/__init__.py，单一版本源），
+#    并按本版本内容更新 packaging/release-notes.md（publish.sh 会校验存在）
 git tag -a v1.1.0 -m "说明"
 git push origin main v1.1.0
-./packaging/publish.sh        # 需 gh 已登录（gh auth login）
+./packaging/publish.sh        # 需 gh 已登录（gh auth login）；可先 --dry-run
 ```
 
 `publish.sh` 会自动构建 deb、创建 Release、上传附件、同步仓库描述与标签。
