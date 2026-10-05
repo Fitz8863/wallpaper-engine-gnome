@@ -337,8 +337,9 @@ python3 wallpaper_picker/paths.py screen      # 只打印探测到的主显示�
 
 **待办，按价值排序**：
 
-1. **多显示器**——目前只输出到 `LWE_SCREEN` 指定的单块屏。渲染器本身支持
-   `--screen-root` 重复指定多块屏，理论上可以扩展。
+1. **多显示器**——方案已定,见 [docs/multi-monitor.md](docs/multi-monitor.md)。
+   渲染器与扩展端都已就绪,改动全在我们这层。阶段 0(参数化、单屏机器上可
+   做可测)可先行;阶段 1 的 UI 与逐屏设置需要外接显示器真机验证,已排队。
 2. **播放列表界面**——渲染器支持 `--playlist`（读 Wallpaper Engine 的
    `config.json`），界面还没有入口。
 3. **修扩展的 `already disposed` 告警**——在 `gnome-extension/wallpaperManager.js`，
