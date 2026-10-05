@@ -34,8 +34,9 @@ class SettingsDialog(Adw.PreferencesWindow):
         # 点 X 是隐藏而不是销毁：实例被主窗口缓存复用，关闭再开不重建
         self.connect("close-request", self._on_close)
 
-        # ---- 应用行为 ----
-        app_page = Adw.PreferencesPage()
+        # ---- 单页布局：三个分组竖排，滚动查看（用户明确要求不分页）----
+        page = Adw.PreferencesPage()
+
         behavior = Adw.PreferencesGroup(title=tr("应用行为"))
 
         row_autostart = Adw.SwitchRow(
@@ -68,10 +69,9 @@ class SettingsDialog(Adw.PreferencesWindow):
             lambda r, _p: picker.set_close_action(
                 "tray" if r.get_selected() == 0 else "quit"))
         behavior.add(row_close)
-        app_page.add(behavior)
+        page.add(behavior)
 
         # ---- 语言 ----
-        lang_page = Adw.PreferencesPage()
         lang_group = Adw.PreferencesGroup(title=tr("外观"))
         row_lang = Adw.ComboRow(
             title=tr("界面语言 / Language"),
@@ -84,10 +84,9 @@ class SettingsDialog(Adw.PreferencesWindow):
             "notify::selected",
             lambda r, _p: picker.set_language(LANG_KEYS[r.get_selected()]))
         lang_group.add(row_lang)
-        lang_page.add(lang_group)
+        page.add(lang_group)
 
         # ---- 关于 ----
-        about_page = Adw.PreferencesPage()
         about_group = Adw.PreferencesGroup()
         about_row = Adw.ActionRow(
             title=tr("关于壁纸选择器"),
@@ -96,11 +95,9 @@ class SettingsDialog(Adw.PreferencesWindow):
         about_row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
         about_row.connect("activated", lambda _r: self._show_about(repo_url))
         about_group.add(about_row)
-        about_page.add(about_group)
+        page.add(about_group)
 
-        self.add(app_page)
-        self.add(lang_page)
-        self.add(about_page)
+        self.add(page)
 
     def _on_close(self, *_args):
         self.hide()
