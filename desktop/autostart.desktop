@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Wallpaper Engine 动态壁纸
-Comment=linux-wallpaperengine 渲染器
-Exec=bash -c "sleep 5; @PROJECT_DIR@/start-wallpaper.sh @WALLPAPER_ID@"
-X-GNOME-Autostart-enabled=true
-NoDisplay=false
-Terminal=false

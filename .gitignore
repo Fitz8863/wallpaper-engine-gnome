@@ -23,3 +23,6 @@ squashfs-root/
 
 # 打包产物
 dist/
+
+# 测试
+.pytest_cache/
