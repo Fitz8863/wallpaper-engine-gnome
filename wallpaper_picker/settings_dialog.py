@@ -24,6 +24,7 @@ class SettingsDialog(Adw.PreferencesWindow):
     def __init__(self, picker, app_version, repo_url, **kwargs):
         super().__init__(**kwargs)
         self._picker = picker
+        self._app_version = app_version
         s = picker.settings
         self.set_transient_for(picker)
         # 不用模态：模态会锁住主窗口输入，一旦交互异常整个应用就像卡死。
@@ -107,7 +108,7 @@ class SettingsDialog(Adw.PreferencesWindow):
         about = Adw.AboutWindow(transient_for=self)
         about.set_application_name(tr("壁纸选择器"))
         about.set_application_icon("io.github.fitz.WallpaperPicker")
-        about.set_version(self._picker.APP_VERSION)
+        about.set_version(self._app_version)
         about.set_developer_name("Fitz")
         about.set_website(repo_url)
         about.set_issue_url(repo_url + "/issues")

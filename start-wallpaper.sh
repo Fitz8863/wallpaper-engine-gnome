@@ -24,16 +24,16 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 
-# 渲染器位置也由 lwe_paths.py 决定（它认 LWE_BIN 环境变量）
-if [ -f "$SCRIPT_DIR/lwe_paths.py" ]; then
-    BIN="$(python3 "$SCRIPT_DIR/lwe_paths.py" renderer 2>/dev/null)"
+# 渲染器位置也由 wallpaper_picker/paths.py 决定（它认 LWE_BIN 环境变量）
+if [ -f "$SCRIPT_DIR/wallpaper_picker/paths.py" ]; then
+    BIN="$(python3 "$SCRIPT_DIR/wallpaper_picker/paths.py" renderer 2>/dev/null)"
 fi
 BIN="${BIN:-${LWE_BIN:-$HOME/linux-wallpaperengine/build/output/linux-wallpaperengine}}"
 
 # 显示器名没有通用常量，向 Mutter 查当前主屏；查不到才回落到 eDP-1。
 # 同样可以用 LWE_SCREEN 覆盖。
-if [ -f "$SCRIPT_DIR/lwe_paths.py" ]; then
-    DETECTED_SCREEN="$(python3 "$SCRIPT_DIR/lwe_paths.py" screen 2>/dev/null)"
+if [ -f "$SCRIPT_DIR/wallpaper_picker/paths.py" ]; then
+    DETECTED_SCREEN="$(python3 "$SCRIPT_DIR/wallpaper_picker/paths.py" screen 2>/dev/null)"
 fi
 SCREEN="${LWE_SCREEN:-${DETECTED_SCREEN:-eDP-1}}"
 STATE_DIR="${LWE_STATE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/wallpaper-picker}"
@@ -103,18 +103,18 @@ PY
 }
 
 # 在常见的 Steam 安装布局里找创意工坊目录。
-# 探测逻辑放在 lwe_paths.py 里（会读 libraryfolders.vdf，因此 Steam 库
+# 探测逻辑放在 wallpaper_picker/paths.py 里（会读 libraryfolders.vdf，因此 Steam 库
 # 装在别的硬盘上也能找到），与图形界面共用同一份实现，行为保持一致。
 find_workshop() {
-    python3 "$SCRIPT_DIR/lwe_paths.py" workshop 2>/dev/null
+    python3 "$SCRIPT_DIR/wallpaper_picker/paths.py" workshop 2>/dev/null
 }
 
 # 重新扫描创意工坊目录刷新清单，这样新订阅的壁纸立刻可用。
-# 扫描逻辑在 lwe_scan.py（与图形界面共用同一份实现，排序和格式只维护一份）。
+# 扫描逻辑在 wallpaper_picker/scan.py（与图形界面共用同一份实现，排序和格式只维护一份）。
 refresh_list() {
     local ws
     ws="$(find_workshop)" || { echo "找不到创意工坊目录，请确认 Steam 里已订阅壁纸" >&2; return 1; }
-    python3 "$SCRIPT_DIR/lwe_scan.py" "$ws" "$LIST" >&2
+    python3 "$SCRIPT_DIR/wallpaper_picker/scan.py" "$ws" "$LIST" >&2
 }
 
 case "${1:-}" in
