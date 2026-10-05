@@ -128,8 +128,10 @@ set -e
 
 # v1 的 deb 把模块平铺在 /usr/lib/wallpaper-engine-gnome/ 下，v2 起收进
 # wallpaper_picker/ 包目录。升级时清掉旧散装文件，避免同名模块残留。
+# 注意：wallpaper-picker.py（根薄壳）v2 也要装在平铺位置，绝不能进这份
+# 清理列表——v1.1.0 的 postinst 曾把它删掉导致 deb 装完起不来。
 LEGACY_DIR=/usr/lib/wallpaper-engine-gnome
-for f in i18n.py tray.py settings_dialog.py lwe_paths.py lwe_scan.py wallpaper-picker.py; do
+for f in i18n.py tray.py settings_dialog.py lwe_paths.py lwe_scan.py; do
     [ -f "$LEGACY_DIR/$f" ] && rm -f "$LEGACY_DIR/$f" || true
 done
 
@@ -169,6 +171,11 @@ chmod 755 "$PKG/DEBIAN/postinst" "$PKG/DEBIAN/prerm"
 
 # ---- 打包 ----
 mkdir -p "$OUT"
+# 产物名带平台标识（wallpaper-engine-gnome_1.1.0_amd64_linux.deb）。
+# 注意：dpkg/apt 只认「包名_版本_架构.deb」的三段式，第四段会被 apt 拒收；
+# 实测 apt 把 amd64_linux 当不认识的架构名直接报无法定位。所以规范产物
+# 保持三段（_all，纯 Python 无架构二进制），上传 Release 时由 publish.sh
+# 复制为带 _amd64_linux 后缀的附件名（dpkg -i 不挑文件名，安装无碍）。
 DEB="$OUT/${PACKAGE}_${VERSION}_${ARCH}.deb"
 dpkg-deb --root-owner-group --build "$PKG" "$DEB" >/dev/null
 echo "==> 产物: $DEB ($(du -h "$DEB" | cut -f1))"

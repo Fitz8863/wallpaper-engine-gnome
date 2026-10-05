@@ -66,7 +66,11 @@ info "构建 deb"
 rm -rf dist
 ./packaging/build-deb.sh >/dev/null
 DEB="$(ls dist/*.deb)"
-ok "产物: $DEB ($(du -h "$DEB" | cut -f1))"
+# 附件展示名带平台标识（用户一眼看出适用设备）；dpkg -i 不挑文件名，
+# 安装无碍（apt 对四段式文件名挑剔，README 的安装命令统一用 dpkg -i）
+RELEASE_ASSET="dist/$(basename "$DEB" .deb)_amd64_linux.deb"
+cp "$DEB" "$RELEASE_ASSET"
+ok "产物: $RELEASE_ASSET ($(du -h "$RELEASE_ASSET" | cut -f1))"
 
 # ---- 仓库描述与标签 ----
 info "设置仓库描述"
@@ -81,11 +85,11 @@ ok "标签已更新: $REPO_TOPICS"
 # ---- 创建 Release ----
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
     info "Release $TAG 已存在，改为上传/覆盖附件"
-    gh release upload "$TAG" "$DEB" --repo "$REPO" --clobber >/dev/null
+    gh release upload "$TAG" "$RELEASE_ASSET" --repo "$REPO" --clobber >/dev/null
     ok "附件已更新"
 else
     info "创建 Release $TAG"
-    gh release create "$TAG" "$DEB" \
+    gh release create "$TAG" "$RELEASE_ASSET" \
         --repo "$REPO" \
         --title "$TAG" \
         --notes "$(cat <<EOF
@@ -94,7 +98,7 @@ else
 下载下方的 \`${PACKAGE}_${VERSION}_all.deb\`，然后：
 
 \`\`\`bash
-sudo apt install ./${PACKAGE}_${VERSION}_all.deb
+sudo dpkg -i ./${PACKAGE}_${VERSION}_amd64_linux.deb
 \`\`\`
 
 **首次安装后需要注销并重新登录一次**——Wayland 下 GNOME Shell 无法热加载新扩展。

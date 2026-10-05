@@ -69,8 +69,12 @@ cd wallpaper-engine-gnome
 下载 deb 后：
 
 ```bash
-sudo apt install ./wallpaper-engine-gnome_1.1.0_all.deb
+sudo dpkg -i ./wallpaper-engine-gnome_1.1.0_amd64_linux.deb
 ```
+
+> 包内架构为 `all`（纯 Python + 脚本，无平台二进制），附件名带 `amd64_linux`
+> 平台标识便于识别；安装命令用 `dpkg -i`（`apt` 对非标准 deb 文件名挑剔，
+> 缺依赖时跑 `sudo apt-get install -f` 补齐即可）。
 
 > **注意**：deb 只包含本方案这一层（界面 + 脚本 + 扩展），**不含渲染器**——
 > 渲染器必须从源码编译（产物 1.5GB，其中 CEF 占 1.3GB 且只有网页类壁纸用得上）。
