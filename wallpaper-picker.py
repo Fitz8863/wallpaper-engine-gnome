@@ -37,6 +37,9 @@ HOME = os.path.expanduser("~")
 SCRIPT = os.path.join(ROOT, "start-wallpaper.sh")
 PICKER = os.path.join(ROOT, "wallpaper-picker.py")
 AUTOSTART = f"{HOME}/.config/autostart/wallpaper-engine.desktop"
+REPO_URL = "https://github.com/Fitz8863/wallpaper-engine-gnome"
+# 发版时与 packaging/build-deb.sh 的 BASE_VERSION 保持一致
+APP_VERSION = "1.1.0"
 EXT_UUID = "linux-wallpaperengine@github.io"
 
 STATE_DIR = os.environ.get(
@@ -52,6 +55,7 @@ THUMB_DIR = os.path.join(STATE_DIR, "thumbs")
 sys.path.insert(0, ROOT)
 from lwe_paths import find_renderer, find_workshop  # noqa: E402
 from lwe_scan import scan_workshop  # noqa: E402
+from settings_dialog import SettingsDialog  # noqa: E402
 from tray import ICON_NAME, TrayIcon  # noqa: E402
 
 RENDERER = find_renderer()
@@ -89,6 +93,9 @@ DEFAULT_SETTINGS = {
     # 应用行为
     "autostart": True,       # 开机自动启动（登录恢复上次的壁纸并常驻托盘）
     "last": None,            # 上次应用的壁纸 ID，登录自启恢复用
+    "restore_on_start": False,   # 手动启动时也恢复上次的壁纸
+    "close_action": "tray",  # 关闭窗口：tray=隐藏到托盘 / quit=退出
+    "language": "system",    # 界面语言：system/zh/en
 }
 
 # 值是字典的键，读盘时要单独处理，不能直接覆盖
@@ -656,6 +663,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
         self.tray = None
         self._tray_hint_shown = False
+        self._settings_dialog = None
         self.connect("close-request", self._on_close_request)
 
     def init_tray(self):
@@ -670,8 +678,9 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.present()
 
     def _on_close_request(self, *args):
-        # 托盘可用时点 ✕ 是隐藏到托盘，真正退出走托盘菜单的「退出」
-        if self.tray is not None and self.tray.available:
+        # 托盘可用且设置了"隐藏到托盘"时，点 ✕ 是隐藏而不是退出
+        if (self.settings.get("close_action", "tray") == "tray"
+                and self.tray is not None and self.tray.available):
             self.hide()
             if not self._tray_hint_shown:
                 self._tray_hint_shown = True
@@ -716,6 +725,11 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.spinner = Gtk.Spinner(tooltip_text="正在切换壁纸…")
         self.spinner.set_visible(False)
         header.pack_end(self.spinner)
+
+        self.settings_btn = Gtk.Button(icon_name="emblem-system-symbolic",
+                                       tooltip_text="设置")
+        self.settings_btn.connect("clicked", self.on_settings_clicked)
+        header.pack_end(self.settings_btn)
         view.add_top_bar(header)
 
         # 扩展检查是个子进程调用，放后台线程，别拖慢窗口出现；
@@ -759,6 +773,11 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if btn.get_active():
             self.active_filter = key
             self.populate()
+
+    def on_settings_clicked(self, _btn):
+        if self._settings_dialog is None:
+            self._settings_dialog = SettingsDialog(self, APP_VERSION, REPO_URL)
+        self._settings_dialog.present()
 
     def _check_extension(self):
         """后台线程里查扩展状态，回主线程再动横幅。"""
@@ -1502,6 +1521,19 @@ class WallpaperPicker(Adw.ApplicationWindow):
             self.write_autostart()
         else:
             self.remove_autostart()
+
+    def set_restore_on_start(self, enabled):
+        self.settings["restore_on_start"] = enabled
+        self.schedule_save()
+
+    def set_close_action(self, action):
+        self.settings["close_action"] = action
+        self.schedule_save()
+
+    def set_language(self, lang):
+        self.settings["language"] = lang
+        self.schedule_save()
+        # 翻译层接入后：i18n.set_language(lang)，重启应用生效
 
     def restore_last(self):
         """登录/启动时恢复上次的壁纸（settings["last"]）。"""
