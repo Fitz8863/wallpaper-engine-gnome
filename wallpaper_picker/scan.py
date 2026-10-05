@@ -21,6 +21,20 @@ import sys
 ORDER = {"scene": 0, "video": 1, "web": 2}
 
 
+def _classify(meta, wid):
+    """从 project.json 判定壁纸类型。
+
+    特殊情况：无 type 但有 dependency 的是「预设包」——它是对某个
+    依赖壁纸的参数配置（渲染器读不到 type 会直接抛错），标成 preset
+    让界面给出明确提示而不是含混的"启动失败"。
+    """
+    title = str(meta.get("title", wid)).strip()
+    wtype = str(meta.get("type", "")).lower()
+    if not wtype:
+        wtype = "preset" if meta.get("dependency") else "?"
+    return title, wtype
+
+
 def scan_workshop(workshop):
     """返回 [(wtype, wid, title), ...]，已按类型和标题排序。
 
@@ -36,8 +50,7 @@ def scan_workshop(workshop):
         try:
             # utf-8-sig：部分作者的 project.json 带 BOM
             meta = json.load(open(pj, encoding="utf-8-sig"))
-            title = str(meta.get("title", wid)).strip()
-            wtype = str(meta.get("type", "?")).lower()
+            title, wtype = _classify(meta, wid)
         except Exception:
             title, wtype = f"{wid}（配置无法解析）", "?"
         rows.append((wtype, wid, title))

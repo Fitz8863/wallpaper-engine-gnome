@@ -63,7 +63,7 @@ from . import APP_VERSION  # noqa: E402
 
 RENDERER = find_renderer()
 
-TYPE_LABEL = {"scene": "场景", "video": "视频", "web": "网页"}
+TYPE_LABEL = {"scene": "场景", "video": "视频", "web": "网页", "preset": "预设"}
 THUMB = 320
 PREVIEW_SIZE = 480
 
@@ -1072,6 +1072,18 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if wall.preview:
             get_texture_async(wall.preview, PREVIEW_SIZE,
                               lambda tex, t=token: self._set_preview(tex, t))
+        if wall.wtype == "preset":
+            # 预设包：对依赖壁纸的参数配置，渲染器不支持，别让它走到
+            # apply（只会得到含混的"启动失败：见日志"）
+            self.apply_btn.set_sensitive(False)
+            self.apply_btn.set_label(tr("应用"))
+            self.subtitle.set_text(
+                " · ".join([tr("预设"), wall.wid]))
+            self.props_box_children_reset(
+                tr("这是预设包壁纸（参数配置），需要它依赖的壁纸引擎，"
+                   "当前渲染器暂不支持。请直接使用它所依赖的那张壁纸。"))
+            self.update_volume_sensitivity_preset()
+            return
         self.apply_btn.set_label(
             tr("使用中") if wall.wid == self.current_id else tr("应用"))
         if not self.switching:
@@ -1082,6 +1094,25 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.load_properties(wall)
         if apply_now:
             self.apply(wall)
+
+    def props_box_children_reset(self, text):
+        while (child := self.props_box.get_first_child()) is not None:
+            self.props_box.remove(child)
+        self.props_box.append(Gtk.Label(
+            label=text, xalign=0, wrap=True,
+            css_classes=["empty-hint", "card-badge"]))
+        self.prop_rows = []
+        self.props_header.set_text(tr("壁纸属性"))
+
+    def update_volume_sensitivity_preset(self):
+        """预设包不能应用，音量行同步禁用。"""
+        self.row_volume.set_sensitive(False)
+        self.row_volume.set_subtitle("")
+        self._loading_volume = True
+        try:
+            self.row_volume._scale.set_value(0)
+        finally:
+            self._loading_volume = False
 
     def load_volume(self, wid):
         """把该壁纸的音量回填到滑块上。

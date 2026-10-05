@@ -30,6 +30,21 @@ class TestScanOrder:
         rows = scan.scan_workshop(str(tmp_path))
         assert rows[0][2] == "ok"
 
+    def test_preset_package_classified(self, tmp_path):
+        """无 type 但有 dependency 的是预设包，标成 preset 而非 ?。"""
+        (tmp_path / "8").mkdir()
+        (tmp_path / "8" / "project.json").write_text(
+            '{"title": "预设", "dependency": "12345"}', encoding="utf-8")
+        rows = scan.scan_workshop(str(tmp_path))
+        assert rows[0][0] == "preset"
+
+    def test_no_type_no_dependency_is_unknown(self, tmp_path):
+        (tmp_path / "7").mkdir()
+        (tmp_path / "7" / "project.json").write_text(
+            '{"title": "怪"}', encoding="utf-8")
+        rows = scan.scan_workshop(str(tmp_path))
+        assert rows[0][0] == "?"
+
 
 class TestI18n:
     def test_zh_passthrough(self):

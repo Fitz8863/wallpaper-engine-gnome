@@ -48,6 +48,13 @@ _STRINGS = {
     "知道了": {"en": "Got it"},
     "全部": {"en": "All"},
     "场景": {"en": "Scene"},
+    "预设": {"en": "Preset"},
+    "这是预设包壁纸（参数配置），需要它依赖的壁纸引擎，"
+    "当前渲染器暂不支持。请直接使用它所依赖的那张壁纸。": {
+        "en": "This is a preset package (a parameter configuration "
+              "for its dependency wallpaper). The renderer does not "
+              "support these yet — use the wallpaper it depends on "
+              "instead."},
     "视频": {"en": "Video"},
     "网页": {"en": "Web"},
     "正在扫描壁纸…": {"en": "Scanning wallpapers…"},
