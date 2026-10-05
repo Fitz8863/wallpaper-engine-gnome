@@ -298,8 +298,9 @@ tail -f ~/.cache/wallpaper-picker/wallpaper.log   # 渲染器输出
 ```
 
 扩展成功把画面贴上桌面时会打印 `lwpe: wallpaper applied on monitor 0`。
-切换壁纸时刷的 `Object .LWPELiveWallpaper ... has been already disposed` 是
-清理旧实例的告警，不影响功能（属于可修的噪音）。
+切换壁纸时刷的 `Object .LWPELiveWallpaper ... has been already disposed`
+告警**已修复**（生命周期改信号驱动，见提交 `1baa457`）：改完需要注销重登
+一次让 Shell 重新加载扩展 JS，之后切换壁纸日志应保持干净。
 
 ### 路径排查
 
@@ -342,8 +343,7 @@ python3 wallpaper_picker/paths.py screen      # 只打印探测到的主显示�
    做可测)可先行;阶段 1 的 UI 与逐屏设置需要外接显示器真机验证,已排队。
 2. **播放列表界面**——渲染器支持 `--playlist`（读 Wallpaper Engine 的
    `config.json`），界面还没有入口。
-3. **修扩展的 `already disposed` 告警**——在 `gnome-extension/wallpaperManager.js`，
-   属于能力范围内的清理工作。
+3. ~~修扩展的 `already disposed` 告警~~ ——已完成（`1baa457`，待注销重登验证）。
 4. **逐显示器保存壁纸属性**——官方支持（"Properties are now saved per-monitor too"），
    我们目前不分显示器。
 
