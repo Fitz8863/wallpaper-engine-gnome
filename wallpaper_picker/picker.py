@@ -1471,6 +1471,9 @@ class WallpaperPicker(Adw.ApplicationWindow):
                 return False
             self.current_id = wall.wid
             self.settings["last"] = wall.wid
+            # last 不落盘的话，切完壁纸直接关机/断电，下次自启恢复的还是
+            # 上上张——防抖只影响写盘时机，这里必须主动排一次
+            self.schedule_save()
             if self.settings.get("autostart", True):
                 self.write_autostart()
             else:
