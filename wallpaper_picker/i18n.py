@@ -146,4 +146,15 @@ _STRINGS = {
     "简体中文": {"en": "Simplified Chinese"},
     "关于壁纸选择器": {"en": "About Wallpaper Picker"},
     "版本、许可证与项目链接": {"en": "Version, license and project link"},
+    "壁纸来源": {"en": "Wallpaper source"},
+    "壁纸目录": {"en": "Wallpaper folder"},
+    "浏览…": {"en": "Browse…"},
+    "重置": {"en": "Reset"},
+    "选择壁纸目录": {"en": "Select wallpaper folder"},
+    "自动探测 Steam 创意工坊；第三方下载的壁纸可在此指定目录": {
+        "en": "Auto-detect the Steam workshop; point this to a folder "
+              "for wallpapers downloaded elsewhere"},
+    "环境变量 LWE_WORKSHOP 已设置，优先于此处（当前：{}）": {
+        "en": "The LWE_WORKSHOP environment variable is set and takes "
+              "priority (currently: {})"},
 }

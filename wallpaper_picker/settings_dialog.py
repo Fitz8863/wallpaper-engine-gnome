@@ -1,11 +1,14 @@
 """设置对话框 —— Adw.PreferencesWindow，主界面顶栏齿轮按钮打开。
 
-三页：应用行为（自启/启动恢复/关闭窗口行为）、语言、关于。
+分组：应用行为（自启/启动恢复/关闭窗口行为）、壁纸来源（手动指定
+非 Steam 场景的壁纸目录）、语言、关于。
 所有改动即时持久化（复用 picker.settings + schedule_save 基建）；
 界面语言的切换在重启应用后生效。
 
 窗口形态：独立非模态窗口（不锁主窗口输入，关闭只是隐藏、实例复用）。
 """
+
+import os
 
 import gi
 
@@ -72,6 +75,25 @@ class SettingsDialog(Adw.PreferencesWindow):
         behavior.add(row_close)
         page.add(behavior)
 
+        # ---- 壁纸来源 ----
+        # 非 Steam 场景（第三方下载、手动整理）在这里指定壁纸目录。
+        # 渲染器侧不需要任何配置：启动器会把不在 Steam 工坊下的壁纸
+        # 以完整路径传给它（--bg 含 / 时渲染器直接按路径处理）。
+        ws_group = Adw.PreferencesGroup(title=tr("壁纸来源"))
+        row_ws = Adw.ActionRow(title=tr("壁纸目录"))
+        self._ws_row = row_ws
+        btn_browse = Gtk.Button(label=tr("浏览…"), valign=Gtk.Align.CENTER)
+        btn_browse.connect("clicked", self._choose_workshop)
+        btn_reset = Gtk.Button(label=tr("重置"), valign=Gtk.Align.CENTER)
+        btn_reset.connect("clicked", self._reset_workshop)
+        row_ws.add_suffix(btn_browse)
+        row_ws.add_suffix(btn_reset)
+        self._ws_browse_btn = btn_browse
+        self._ws_reset_btn = btn_reset
+        self._update_workshop_row()
+        ws_group.add(row_ws)
+        page.add(ws_group)
+
         # ---- 语言 ----
         lang_group = Adw.PreferencesGroup(title=tr("外观"))
         row_lang = Adw.ComboRow(
@@ -103,6 +125,45 @@ class SettingsDialog(Adw.PreferencesWindow):
     def _on_close(self, *_args):
         self.hide()
         return True
+
+    # ---- 壁纸目录选择 ----
+
+    def _update_workshop_row(self):
+        """副标题跟当前生效状态走，包括环境变量优先时的说明。"""
+        env = os.environ.get("LWE_WORKSHOP")
+        if env:
+            self._ws_row.set_subtitle(
+                tr("环境变量 LWE_WORKSHOP 已设置，优先于此处（当前：{}）").format(env))
+            self._ws_browse_btn.set_sensitive(False)
+            self._ws_reset_btn.set_sensitive(False)
+            return
+        chosen = self._picker.settings.get("workshop")
+        if chosen:
+            self._ws_row.set_subtitle(chosen)
+        else:
+            self._ws_row.set_subtitle(
+                tr("自动探测 Steam 创意工坊；第三方下载的壁纸可在此指定目录"))
+        self._ws_browse_btn.set_sensitive(True)
+        self._ws_reset_btn.set_sensitive(bool(chosen))
+
+    def _choose_workshop(self, _btn):
+        dialog = Gtk.FileDialog(title=tr("选择壁纸目录"))
+        dialog.select_folder(self, None, self._on_workshop_selected)
+
+    def _on_workshop_selected(self, dialog, result):
+        try:
+            folder = dialog.select_folder_finish(result)
+        except Exception:
+            return          # 用户取消或关闭对话框，不是错误
+        path = folder.get_path() if folder is not None else None
+        if not path:
+            return
+        self._picker.set_workshop(path)
+        self._update_workshop_row()
+
+    def _reset_workshop(self, _btn):
+        self._picker.set_workshop(None)
+        self._update_workshop_row()
 
     def _show_about(self, repo_url):
         about = Adw.AboutWindow(transient_for=self)

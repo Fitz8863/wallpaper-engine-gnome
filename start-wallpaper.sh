@@ -180,6 +180,18 @@ else
     echo "匹配到: $(grep -- "$BG" "$LIST" | cut -f3)"
 fi
 
+# 渲染器对 --bg 的语义（translateBackground）：值含 / 按文件路径，
+# 纯数字固定去 Steam 工坊找。自定义壁纸目录（设置里的 workshop）不在
+# Steam 工坊下，必须传完整路径；Steam 订阅的壁纸维持传 ID。
+WORKSHOP_DIR="$(find_workshop 2>/dev/null)"
+STEAM_WS="$(python3 "$SCRIPT_DIR/wallpaper_picker/paths.py" steam-workshop 2>/dev/null)"
+if [ -n "$STEAM_WS" ] && [ -d "$STEAM_WS/$BG" ]; then
+    :   # Steam 订阅壁纸，渲染器自己能按 ID 找到
+elif [ -n "$WORKSHOP_DIR" ] && [ "$WORKSHOP_DIR" != "$STEAM_WS" ] \
+        && [ -d "$WORKSHOP_DIR/$BG" ]; then
+    BG="$WORKSHOP_DIR/$BG"
+fi
+
 # 先停掉旧实例。轮询等它真的退出（通常几十毫秒），而不是固定 sleep 1——
 # 固定等待会让切换壁纸白等一秒，图形界面调用时尤其明显。
 pkill -f "linux-wallpaperengine.*--gnome" 2>/dev/null

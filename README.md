@@ -170,6 +170,7 @@ gdbus call --session --dest org.gnome.Mutter.DisplayConfig \
 | `autostart` / `last` | 开机自启开关 / 上次的壁纸 ID（登录恢复用） |
 | `close_action` | 关闭窗口行为：`tray`（默认，隐藏到托盘）或 `quit` |
 | `language` | 界面语言：`system` / `zh` / `en` |
+| `workshop` | 手动指定的壁纸目录；删掉该键或设为 `null` 恢复自动探测 |
 
 命令行透传的参数优先级更高，可临时覆盖（不改设置文件）：
 
@@ -179,7 +180,13 @@ gdbus call --session --dest org.gnome.Mutter.DisplayConfig \
 
 ### 路径探测与环境变量
 
-所有路径自动探测，特殊布局可用环境变量覆盖：
+壁纸目录的优先级：**环境变量 `LWE_WORKSHOP` > 设置里手动选择 > 自动探测**。
+没有 Steam、或壁纸是第三方下载/手动整理的，在**设置 → 壁纸来源**里选择
+目录即可，选择器会像 Steam 工坊一样列出并管理里面的壁纸（每张壁纸一个
+子目录、内含 `project.json`）；启动时会把不在 Steam 工坊下的壁纸以完整
+路径传给渲染器，无需其他配置。
+
+其余路径自动探测，特殊布局可用环境变量覆盖：
 
 | 环境变量 | 作用 | 默认行为 |
 |---|---|---|

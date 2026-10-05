@@ -322,7 +322,7 @@ python3 wallpaper_picker/paths.py screen      # 只打印探测到的主显示�
 | 层 | 内容 | 存储 |
 |---|---|---|
 | 全局 | 静音、帧率上限、缩放模式、自动静音、粒子/视差/鼠标 | `settings.json` 顶层 |
-| 应用行为 | `autostart` 开机自启、`last` 上次壁纸、`restore_on_start`、`close_action`、`language` | `settings.json` 顶层 |
+| 应用行为 | `autostart` 开机自启、`last` 上次壁纸、`restore_on_start`、`close_action`、`language`、`workshop` 手动壁纸目录 | `settings.json` 顶层 |
 | 逐壁纸（我们的） | **音量** | `settings.json` 的 `volumes{壁纸ID: 值}` |
 | 逐壁纸（作者定义） | 壁纸自己的可调项 | `settings.json` 的 `properties{壁纸ID: {...}}` |
 
@@ -368,6 +368,7 @@ python3 wallpaper_picker/paths.py screen      # 只打印探测到的主显示�
 | `3d2390d` | 设置对话框（顶栏齿轮 → Adw.PreferencesWindow）：自启/启动恢复/关闭行为/语言/关于；关闭窗口行为可配置 |
 | `cc63b8f` | 中英双语：i18n.py 的 tr() 字典翻译层，全部 UI 文案接入，语言设置重启生效 |
 | `ee614e6` 后续 | 帧率上限从自由滑块改为 WE 式预设下拉（240~1，默认 30），旧版自定义值兼容 |
+| 非 Steam 壁纸目录 | 设置加「壁纸来源」（workshop 键，env > 手动选择 > 自动探测）；启动器对不在 Steam 工坊下的壁纸传完整路径（渲染器 --bg 含 / 按路径处理），详见 paths.py 与 start-wallpaper.sh 注释 |
 
 ## 发布流程
 

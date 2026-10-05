@@ -99,6 +99,7 @@ DEFAULT_SETTINGS = {
     "restore_on_start": False,   # 手动启动时也恢复上次的壁纸
     "close_action": "tray",  # 关闭窗口：tray=隐藏到托盘 / quit=退出
     "language": "system",    # 界面语言：system/zh/en
+    "workshop": None,        # 手动选择的壁纸目录；None = 自动探测
 }
 
 # 值是字典的键，读盘时要单独处理，不能直接覆盖
@@ -462,7 +463,10 @@ def running_wallpaper_id():
         args = [a.decode() for a in
                 open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0") if a]
         if "--bg" in args:
-            return args[args.index("--bg") + 1]
+            value = args[args.index("--bg") + 1]
+            # 自定义目录壁纸的 --bg 是完整路径（渲染器对含 / 的值按路径
+            # 处理），归一成目录名才能与清单里的 wid 对齐
+            return os.path.basename(value)
     except Exception:
         pass
     return None
@@ -1576,6 +1580,16 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.settings["language"] = lang
         i18n.set_language(lang)   # 立即作用于之后创建的控件；完整生效需重启
         self.schedule_save()
+
+    def set_workshop(self, path):
+        """壁纸目录手动选择（None = 恢复自动探测）。
+
+        目录变化影响整个清单，保存后必须重新扫描；环境变量 LWE_WORKSHOP
+        优先级更高，设了它的时候这里改了也不生效（对话框里有说明）。
+        """
+        self.settings["workshop"] = path
+        self.schedule_save()
+        self.reload()
 
     def restore_last(self):
         """登录/启动时恢复上次的壁纸（settings["last"]）。"""

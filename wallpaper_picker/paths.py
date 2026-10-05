@@ -20,6 +20,7 @@
     python3 wallpaper_picker/paths.py report     # 打印完整探测报告
 """
 
+import json
 import os
 import re
 import sys
@@ -95,12 +96,30 @@ def steam_libraries():
     return unique
 
 
-def find_workshop():
-    """返回创意工坊壁纸目录，找不到返回 None。"""
-    override = os.environ.get("LWE_WORKSHOP")
-    if override:
-        return override if os.path.isdir(override) else None
+def state_settings_path():
+    """settings.json 的位置。
 
+    规则与 picker.py 的 STATE_DIR、start-wallpaper.sh 的 STATE_DIR 一致
+    （LWE_STATE_DIR > $XDG_CACHE_HOME/wallpaper-picker > ~/.cache/...），
+    三处各写一份是既有布局，改动时要同步。
+    """
+    base = os.environ.get("LWE_STATE_DIR") or os.path.join(
+        os.environ.get("XDG_CACHE_HOME", f"{HOME}/.cache"), "wallpaper-picker")
+    return os.path.join(base, "settings.json")
+
+
+def _chosen_workshop():
+    """用户在设置里手动选择的壁纸目录（settings.json 的 workshop 键）。"""
+    try:
+        with open(state_settings_path(), encoding="utf-8") as fh:
+            chosen = json.load(fh).get("workshop")
+    except Exception:
+        return None
+    return chosen if chosen and os.path.isdir(chosen) else None
+
+
+def _steam_workshop_detected():
+    """自动探测：遍历 Steam 库，再走固定位置兜底。"""
     for library in steam_libraries():
         candidate = os.path.join(library, "steamapps", "workshop",
                                  "content", APP_ID)
@@ -111,6 +130,34 @@ def find_workshop():
         if os.path.isdir(candidate):
             return candidate
     return None
+
+
+def find_steam_workshop():
+    """Steam 创意工坊目录，忽略环境变量与手动选择。
+
+    启动器用来判定壁纸归属：渲染器对纯数字 --bg 固定去 Steam 工坊找，
+    自定义目录里的壁纸必须传完整路径。这个查询必须与「用户当前生效
+    目录」无关。
+    """
+    return _steam_workshop_detected()
+
+
+def find_workshop():
+    """返回当前生效的创意工坊壁纸目录，找不到返回 None。
+
+    优先级：LWE_WORKSHOP 环境变量 > 设置里手动选择（settings.json 的
+    workshop 键）> 自动探测。手动选择这一层让非 Steam 场景（第三方
+    下载、手动整理的壁纸）也能用图形界面与命令行。
+    """
+    override = os.environ.get("LWE_WORKSHOP")
+    if override:
+        return override if os.path.isdir(override) else None
+
+    chosen = _chosen_workshop()
+    if chosen:
+        return chosen
+
+    return _steam_workshop_detected()
 
 
 def find_assets():
@@ -178,6 +225,12 @@ def report():
 
     lines.append("")
     lines.append("创意工坊壁纸目录：")
+    if os.environ.get("LWE_WORKSHOP"):
+        source = "（来自环境变量 LWE_WORKSHOP）"
+    elif _chosen_workshop():
+        source = "（来自设置中的手动选择）"
+    else:
+        source = "（自动探测）"
     workshop = find_workshop()
     if workshop:
         try:
@@ -185,9 +238,10 @@ def report():
                          if os.path.isdir(os.path.join(workshop, d))])
         except OSError:
             count = "?"
-        lines.append(f"  {workshop}（{count} 张）")
+        lines.append(f"  {workshop}{source}（{count} 张）")
     else:
-        lines.append("  （未找到——请确认 Steam 里已安装 Wallpaper Engine 并订阅壁纸）")
+        lines.append(f"  （未找到{source}——请确认 Steam 里已安装 "
+                     "Wallpaper Engine 并订阅壁纸，或在设置里手动选择目录）")
 
     lines.append("")
     lines.append("Wallpaper Engine assets：")
@@ -209,6 +263,14 @@ if __name__ == "__main__":
     action = sys.argv[1] if len(sys.argv) > 1 else "report"
     if action == "workshop":
         path = find_workshop()
+        if path:
+            print(path)
+        else:
+            sys.exit(1)
+    elif action == "steam-workshop":
+        # 与 find_workshop 的区别：忽略环境变量与手动选择，只认 Steam。
+        # start-wallpaper.sh 用它判定壁纸该传 ID 还是完整路径。
+        path = find_steam_workshop()
         if path:
             print(path)
         else:
