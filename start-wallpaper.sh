@@ -161,7 +161,7 @@ esac
 
 if [ ! -x "$BIN" ]; then
     echo "渲染器还没编译: $BIN" >&2
-    echo "先跑 scripts/install.sh，或用 LWE_BIN 指定其他位置" >&2
+    echo "先跑 install.sh，或用 LWE_BIN 指定其他位置" >&2
     exit 1
 fi
 

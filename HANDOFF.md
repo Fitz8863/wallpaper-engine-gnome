@@ -29,7 +29,7 @@ wallpaper_picker/       应用 Python 包（deb 整目录安装）
   scan.py               创意工坊扫描：清单解析+排序（纯 stdlib，同上）
   i18n.py  tray.py  settings_dialog.py
 start-wallpaper.sh      命令行启动器：参数解析、进程管理、自启
-tests/                  pytest 纯逻辑层测试（36 例，不需要显示环境）
+tests/                  pytest 纯逻辑层测试（38 例，不需要显示环境）
 install.sh              一键安装：系统依赖 → 编译渲染器 → 装扩展 → 注册入口
 packaging/
   build-deb.sh          构建 deb（整目录安装包，版本取自 __init__.py）

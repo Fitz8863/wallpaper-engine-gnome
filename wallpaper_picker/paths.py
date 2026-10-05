@@ -15,9 +15,9 @@
     2. ~/linux-wallpaperengine/build/output/linux-wallpaperengine
 
 命令行自测：
-    python3 lwe_paths.py workshop   # 打印创意工坊目录
-    python3 lwe_paths.py renderer   # 打印渲染器路径
-    python3 lwe_paths.py report     # 打印完整探测报告
+    python3 wallpaper_picker/paths.py workshop   # 打印创意工坊目录
+    python3 wallpaper_picker/paths.py renderer   # 打印渲染器路径
+    python3 wallpaper_picker/paths.py report     # 打印完整探测报告
 """
 
 import os

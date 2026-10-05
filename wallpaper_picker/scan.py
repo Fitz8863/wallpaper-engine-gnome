@@ -6,10 +6,10 @@
 这类不一致。现在只留这一份实现。
 
 命令行用法（start-wallpaper.sh 调用，写 TSV 清单）:
-    python3 lwe_scan.py <workshop目录> <输出文件>
+    python3 wallpaper_picker/scan.py <workshop目录> <输出文件>
 
 Python 调用（wallpaper_picker.picker 使用）:
-    from lwe_scan import scan_workshop
+    from .scan import scan_workshop
 """
 
 import glob
