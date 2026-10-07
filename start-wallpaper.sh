@@ -132,8 +132,11 @@ case "${1:-}" in
         if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
             kill "$(cat "$PIDFILE")" 2>/dev/null && stopped=1
         fi
-        # pidfile 可能过期，再按进程名兜一次
+        # pidfile 可能过期，再按进程名兜两次：SIGTERM 可能被渲染器线程
+        # 屏蔽（见下方切换注释），SIGKILL 保底
         pkill -f "linux-wallpaperengine.*--gnome" 2>/dev/null && stopped=1
+        sleep 0.2
+        pkill -9 -f "linux-wallpaperengine.*--gnome" 2>/dev/null && stopped=1
         rm -f "$PIDFILE"
         if [ "$stopped" = 1 ]; then
             # 停止即撤掉登录自启，与图形界面的「停止」按钮行为一致——
@@ -199,6 +202,10 @@ for _ in $(seq 1 20); do
     pgrep -f "linux-wallpaperengine.*--gnome" >/dev/null 2>&1 || break
     sleep 0.05
 done
+# 实测渲染器的线程会屏蔽 SIGTERM（NVIDIA 驱动库的常见行为）：外接屏
+# 断开后挂在死屏上的旧实例能无限期无视 SIGTERM，越积越多还占着已消失
+# 的屏。SIGKILL 对 S 状态进程必杀，作为兜底。
+pkill -9 -f "linux-wallpaperengine.*--gnome" 2>/dev/null || true
 
 # 从设置文件生成参数；命令行透传的参数放最后，可以覆盖设置里的值
 mapfile -t FLAGS < <(build_flags "$BG")

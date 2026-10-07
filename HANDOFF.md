@@ -224,6 +224,16 @@ Wayland 普通窗口不允许盖住 Dock/顶栏，实测 2560x1600 屏上 config
 `WAYLAND_DEBUG=client ./start-wallpaper.sh <ID>` 抓 Wayland 协议日志，
 看 `xdg_toplevel.configure` 的数值——Release 版没有 debug 日志开关，这是唯一入口。
 
+**渲染器进程无视 SIGTERM，多实例越积越多**
+
+外接屏断开/切换后，挂在已消失屏上的渲染器实例杀不死：线程状态 S
+（poll 等待，可中断），但 SIGTERM 被**线程级信号掩码屏蔽**（NVIDIA
+驱动库的典型行为），`pkill` 发的 TERM 永远无人处理，进程越积越多、
+占着已消失的屏。解法：`start-wallpaper.sh` 的切换与 `--stop` 都加
+SIGKILL 兜底（S 状态下必杀）。排查同类问题时注意 `pgrep -af` 会匹配
+到执行它的 shell 自身命令行（和 pkill 自匹配是同一个坑），数实例
+前先剔除 bash 行。
+
 **壁纸层脚本的 import 语句会让整层失效（White block 类问题）**
 新版工坊壁纸的层脚本带 `import * as WEMath from 'WEMath'` 这类 ES 模块语句。
 ScriptEngine 把模块脚本压平成 IIFE 普通脚本时剥离了 `'use strict'` 和 `export `，
