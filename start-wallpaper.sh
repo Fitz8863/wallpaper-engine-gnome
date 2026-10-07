@@ -169,12 +169,16 @@ if [ ! -x "$BIN" ]; then
 fi
 
 # 前导多屏参数（必须出现在壁纸参数之前）：--all-screens 克隆到全部
-# 已连接屏；--screen CONNECTOR ID 逐屏指定（可重复，出现即脱离克隆）。
+# 已连接屏；--screen CONNECTOR ID 逐屏指定（可重复，出现即脱离克隆）；
+# --apply-plan 不带壁纸参数，纯按 settings 意图（clone/screens/last）
+# 拼装全部屏——登录恢复与设置改动后的 reapply 走这条通道。
 ALL_SCREENS=""
+APPLY_PLAN=0
 EXPLICIT=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --all-screens) ALL_SCREENS=1; shift;;
+        --apply-plan) APPLY_PLAN=1; shift;;
         --screen) EXPLICIT+=("--screen" "$2" "$3"); shift 3;;
         *) break;;
     esac
@@ -199,7 +203,7 @@ if [ -n "$ARG" ]; then
         echo "匹配到: $(grep -- "$BG" "$LIST" | cut -f3)"
     fi
 fi
-if [ -z "$BG" ] && [ ${#EXPLICIT[@]} -eq 0 ]; then
+if [ -z "$BG" ] && [ ${#EXPLICIT[@]} -eq 0 ] && [ "$APPLY_PLAN" != 1 ]; then
     echo "用法: $0 [--all-screens | --screen 连接器 ID ...] [壁纸ID或名称]" >&2
     exit 1
 fi

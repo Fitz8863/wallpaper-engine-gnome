@@ -55,7 +55,7 @@ THUMB_DIR = os.path.join(STATE_DIR, "thumbs")
 # i18n._LANG 等模块级状态就会分裂（表现为托盘/对话框翻译静默失效）
 from . import i18n  # noqa: E402
 from .i18n import tr  # noqa: E402
-from .paths import find_renderer, find_workshop, wallpaper_bg_arg  # noqa: E402
+from .paths import find_renderer, find_screens, find_workshop, wallpaper_bg_arg  # noqa: E402
 from .scan import scan_workshop  # noqa: E402
 from .settings_dialog import SettingsDialog  # noqa: E402
 from .tray import ICON_NAME, TrayIcon  # noqa: E402
@@ -462,19 +462,34 @@ def wallpaper_resolution(wall):
     return dims
 
 
-def running_wallpaper_id():
+def running_wallpaper_ids():
+    """解析运行中渲染器的多屏映射 {connector: wid}（wid 归一为目录名）。
+
+    cmdline 里 --screen-root 与 --bg 成对出现，顺序即 launch 计划顺序
+    （主屏在最前）。进程不在跑或参数异常时返回 {}，调用方按无壁纸处理。
+    """
+    result = {}
     try:
         pid = open(PIDFILE).read().strip()
         args = [a.decode() for a in
                 open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0") if a]
-        if "--bg" in args:
-            value = args[args.index("--bg") + 1]
-            # 自定义目录壁纸的 --bg 是完整路径（渲染器对含 / 的值按路径
-            # 处理），归一成目录名才能与清单里的 wid 对齐
-            return os.path.basename(value)
+        i = 0
+        while i < len(args) - 2:
+            if args[i] == "--screen-root":
+                conn = args[i + 1]
+                if args[i + 2] == "--bg" and i + 3 < len(args):
+                    result[conn] = os.path.basename(args[i + 3])
+                    i += 4
+                    continue
+            i += 1
     except Exception:
         pass
-    return None
+    return result
+
+
+def running_wallpaper_id():
+    """主屏（第一块屏）当前运行的壁纸；无渲染器时返回 None。"""
+    return next(iter(running_wallpaper_ids().values()), None)
 
 
 def extension_loaded():
@@ -636,7 +651,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
                          default_height=820)
         self.settings = load_settings()
         self.wallpapers = []
-        self.current_id = None
+        self.current_screens = {}   # {connector: wid} 运行中的多屏映射
+        self.current_id = None      # 主屏那张（兼容单屏逻辑）
         self.selected = None
         self.cards = {}
         self.prop_rows = []
@@ -848,6 +864,22 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.row_volume.set_sensitive(False)   # 没选中壁纸时不知道音量存给谁
         own_group.add(self.row_volume)
 
+        # ---- 应用到显示器（多屏；单屏时只有「主屏」一项，无感）----
+        # 选择在点「应用」时生效：克隆=全部屏同一张；主屏=本次壁纸覆盖
+        # 主屏；具体 connector=该屏单独换（其余屏按设置保留）。
+        self._scope_keys, scope_choices = ["clone", "primary"], [
+            ("clone", tr("所有屏（克隆）")), ("primary", tr("主屏"))]
+        for conn, primary in find_screens():
+            self._scope_keys.append(conn)
+            scope_choices.append(
+                (conn, tr("{}（主）").format(conn) if primary else conn))
+        self.screen_scope = self.combo_row(
+            tr("应用到显示器"), scope_choices, self._scope_keys[0],
+            lambda _v: None)
+        if not self.settings.get("clone", True):
+            # 逐屏模式初始停在「主屏」，暗示这次应用只会覆盖主屏
+            self.screen_scope._dropdown.set_selected(1)
+        own_group.add(self.screen_scope)
         # ---- 播放设置（全局，收进折叠分组省空间）----
         group = Adw.PreferencesGroup(margin_top=4)
         self.settings_group = group
@@ -950,6 +982,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
             lambda dd, _p: on_change(keys[dd.get_selected()]))
         row = Adw.ActionRow(title=title)
         row.add_suffix(dropdown)
+        row._dropdown = dropdown      # 供回填/读取（模式同 slider_row）
+        row._keys = keys
         return row
 
     def _fps_choices(self):
@@ -968,7 +1002,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self._props_cache.clear()
         _RES_CACHE.clear()
         self.wallpapers = scan_wallpapers()
-        self.current_id = running_wallpaper_id()
+        self.current_screens = running_wallpaper_ids()
+        self.current_id = running_wallpaper_id()   # 主屏那张（兼容旧逻辑）
         self.populate()
         self.update_status()
         # 启动时自动选中：优先命令行的 --select，其次正在运行的壁纸
@@ -999,10 +1034,12 @@ class WallpaperPicker(Adw.ApplicationWindow):
         """只更新「哪张在用」的高亮，不重建网格。
 
         切换壁纸后如果重建整个网格，滚动条会跳回顶部——用户想再换一张
-        就得重新往下翻。所以这里原地改样式。
+        就得重新往下翻。所以这里原地改样式。多屏时任一屏在用的壁纸都算
+        「使用中」。
         """
+        in_use = set(self.current_screens.values())
         for wid, widgets in self.cards.items():
-            is_current = wid == self.current_id
+            is_current = wid in in_use
             box, badge = widgets["box"], widgets["badge"]
             has_class = box.has_css_class("wallpaper-card-current")
             if is_current and not has_class:
@@ -1015,7 +1052,10 @@ class WallpaperPicker(Adw.ApplicationWindow):
         wall = next((w for w in self.wallpapers if w.wid == wid), None)
         if wall is None:
             return ""
-        prefix = tr("使用中 · ") if wid == self.current_id else ""
+        used_on = [c for c, w in self.current_screens.items() if w == wid]
+        prefix = tr("使用中 · ") if used_on else ""
+        if len(used_on) > 1:
+            prefix = tr("使用中 · {} 块屏 · ").format(len(used_on))
         return f"{prefix}{tr(TYPE_LABEL.get(wall.wtype, wall.wtype))}"
 
     def make_card(self, wall):
@@ -1094,9 +1134,11 @@ class WallpaperPicker(Adw.ApplicationWindow):
             self.update_volume_sensitivity_preset()
             return
         self.apply_btn.set_label(
-            tr("使用中") if wall.wid == self.current_id else tr("应用"))
+            tr("使用中") if wall.wid in self.current_screens.values()
+            else tr("应用"))
         if not self.switching:
-            self.apply_btn.set_sensitive(wall.wid != self.current_id)
+            self.apply_btn.set_sensitive(
+                wall.wid not in self.current_screens.values())
         self.load_volume(wall.wid)
         self.update_volume_sensitivity()
         self.update_fps_hint(wall.wtype)
@@ -1410,12 +1452,13 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
         连续拖动滑块会触发很多次，所以做个防抖，避免把渲染器反复重启。
 
-        wid 表示改的是哪张壁纸的设置。如果改的不是正在运行的那张，就完全
-        不必重启渲染器——早期版本没区分这点，编辑别的壁纸会白白打断当前壁纸。
+        wid 表示改的是哪张壁纸的设置。如果它没在任一块屏上运行，就完全
+        不必重启渲染器——早期版本没区分这点，编辑别的壁纸会白白打断
+        当前壁纸。多屏下重启是整体的（单进程），套用当前设置意图即可。
         """
-        if self.current_id is None:
+        if not self.current_screens:
             return
-        if wid is not None and wid != self.current_id:
+        if wid is not None and wid not in self.current_screens.values():
             return
         if self._reapply_source is not None:
             GLib.source_remove(self._reapply_source)
@@ -1423,10 +1466,20 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
     def _do_reapply(self):
         self._reapply_source = None
-        target = next((w for w in self.wallpapers if w.wid == self.current_id),
-                      None)
-        if target is not None:
-            self.apply(target, quiet=True)
+        # 按设置里的多屏意图整体重启渲染器（不改 last/克隆偏好）
+        self.run_script_async(["--apply-plan"], self._after_reapply)
+        return False
+
+    def _after_reapply(self, result):
+        if result.returncode == 0:
+            self.current_screens = running_wallpaper_ids()
+            self.current_id = next(iter(self.current_screens.values()), None)
+        else:
+            detail = (result.stderr or "").strip().splitlines()
+            self.toast_overlay.add_toast(Adw.Toast(
+                title=tr("启动失败：{}").format(
+                    detail[-1][:100] if detail else tr("见日志"))))
+        self.update_status()
         return False
 
     # ---------------------------------------------------------- 操作
@@ -1462,7 +1515,17 @@ class WallpaperPicker(Adw.ApplicationWindow):
     def apply(self, wall, quiet=False):
         if wall is None or getattr(self, "switching", False):
             return
-        self._flush_save()   # 启动脚本马上要读 settings.json，先落盘
+        # 应用目标由侧栏「应用到显示器」决定；意图先写盘——start-wallpaper.sh
+        # 的 launch 计划按 settings 拼装全部屏，改副屏不会丢主屏的壁纸
+        scope = self.current_scope()
+        if scope == "clone":
+            self.settings["clone"] = True
+            self.settings["screens"] = {}
+        elif scope not in (None, "primary"):
+            self.settings["clone"] = False
+            self.settings.setdefault("screens", {})[scope] = wall.wid
+        self.settings["last"] = wall.wid
+        self._flush_save()
         self.set_busy(True, tr("正在切换：{} …").format(wall.title))
 
         def done(result):
@@ -1474,15 +1537,14 @@ class WallpaperPicker(Adw.ApplicationWindow):
                         detail[-1][:100] if detail else tr("见日志"))))
                 self.update_status()
                 return False
-            self.current_id = wall.wid
-            self.settings["last"] = wall.wid
-            # last 不落盘的话，切完壁纸直接关机/断电，下次自启恢复的还是
-            # 上上张——防抖只影响写盘时机，这里必须主动排一次
-            self.schedule_save()
+            # 以渲染器进程的真实 cmdline 为准刷新运行态（含多屏映射）
+            self.current_screens = running_wallpaper_ids()
+            self.current_id = next(iter(self.current_screens.values()), wall.wid)
             if self.settings.get("autostart", True):
                 self.write_autostart()
             else:
                 self.remove_autostart()
+            self.schedule_save()   # 与 shell 的回写合并落盘（幂等）
             self.update_highlight()      # 原地更新，不重建网格（否则滚动条跳顶）
             self.update_status()
             self.apply_btn.set_sensitive(False)
@@ -1492,7 +1554,13 @@ class WallpaperPicker(Adw.ApplicationWindow):
                     title=tr("已应用：{}").format(wall.title)))
             return False
 
-        self.run_script_async([wall.wid], done)
+        if scope == "clone":
+            args = ["--all-screens", wall.wid]
+        elif scope not in (None, "primary"):
+            args = ["--screen", scope, wall.wid]
+        else:
+            args = [wall.wid]
+        self.run_script_async(args, done)
 
     def on_stop(self, _btn):
         self.stop_wallpaper()
@@ -1589,6 +1657,28 @@ class WallpaperPicker(Adw.ApplicationWindow):
         i18n.set_language(lang)   # 立即作用于之后创建的控件；完整生效需重启
         self.schedule_save()
 
+    def current_scope(self):
+        """侧栏「应用到显示器」的当前选择:clone / primary / connector。
+
+        下拉只在点「应用」时读取，平时切换不触发任何动作。
+        """
+        idx = self.screen_scope._dropdown.get_selected()
+        if 0 <= idx < len(self.screen_scope._keys):
+            return self.screen_scope._keys[idx]
+        return "clone"
+
+    def set_clone(self, enabled):
+        """克隆开关（设置对话框）：开 = 全部屏跟随主屏壁纸。
+
+        关掉时不改变任何屏的当前画面（真正的逐屏差异从侧栏的
+        「应用到显示器」开始），开着时切回克隆需要重拼全部屏。
+        """
+        self.settings["clone"] = bool(enabled)
+        if enabled:
+            self.settings["screens"] = {}
+        self.schedule_save()
+        self.schedule_reapply()
+
     def set_workshop(self, path):
         """壁纸目录手动选择（None = 恢复自动探测）。
 
@@ -1600,7 +1690,14 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.reload()
 
     def restore_last(self):
-        """登录/启动时恢复上次的壁纸（settings["last"]）。"""
+        """登录/启动恢复：克隆 → 全屏上次的壁纸；逐屏 → 按设置意图拼装。
+
+        settings 里的意图（clone/screens/last）由应用时写入，
+        --apply-plan 让 launch 无壁纸参数地按意图重拼全部屏。
+        """
+        if not self.settings.get("clone", True):
+            self.run_script_async(["--apply-plan"], self._after_reapply)
+            return False
         last = self.settings.get("last")
         wall = next((w for w in self.wallpapers if w.wid == str(last)), None) \
             if last else None
@@ -1610,11 +1707,20 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
     def update_status(self):
         total = len(self.wallpapers)
-        if self.current_id:
-            title = next((w.title for w in self.wallpapers
-                          if w.wid == self.current_id), self.current_id)
-            self.status.set_text(
-                tr("正在使用：{}　·　共 {} 张壁纸").format(title, total))
+        if self.current_screens:
+            titles, seen = [], set()
+            for wid in self.current_screens.values():
+                if wid in seen:
+                    continue
+                seen.add(wid)
+                titles.append(next((w.title for w in self.wallpapers
+                                    if w.wid == wid), wid))
+            if len(titles) == 1:
+                text = tr("正在使用：{}　·　共 {} 张壁纸").format(titles[0], total)
+            else:
+                text = tr("正在使用：{}（主屏）+ {}　·　共 {} 张壁纸").format(
+                    titles[0], " + ".join(titles[1:]), total)
+            self.status.set_text(text)
             self.stop_btn.set_sensitive(True)
         else:
             self.status.set_text(

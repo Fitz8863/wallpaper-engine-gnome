@@ -17,6 +17,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gtk
 
 from .i18n import tr
+from .paths import find_screens
 
 LANG_KEYS = ["system", "zh", "en"]
 LANG_LABELS = ["跟随系统", "简体中文", "English"]
@@ -93,6 +94,26 @@ class SettingsDialog(Adw.PreferencesWindow):
         self._update_workshop_row()
         ws_group.add(row_ws)
         page.add(ws_group)
+
+        # ---- 显示器（多屏概览；逐屏更改在主窗口的「应用到显示器」）----
+        mm_group = Adw.PreferencesGroup(title=tr("显示器"))
+        row_clone = Adw.SwitchRow(
+            title=tr("所有显示器使用同一壁纸"),
+            subtitle=tr("关闭后可在主窗口逐屏选择不同的壁纸"),
+            active=bool(s.get("clone", True)))
+        row_clone.connect(
+            "notify::active",
+            lambda r, _p: picker.set_clone(r.get_active()))
+        mm_group.add(row_clone)
+        screens_map = s.get("screens") or {}
+        for conn, primary in find_screens():
+            wid = screens_map.get(conn) or s.get("last")
+            title = next((w.title for w in picker.wallpapers if w.wid == wid),
+                         wid or "—")
+            mm_group.add(Adw.ActionRow(
+                title=tr("{}（主）").format(conn) if primary else conn,
+                subtitle=title))
+        page.add(mm_group)
 
         # ---- 语言 ----
         lang_group = Adw.PreferencesGroup(title=tr("外观"))

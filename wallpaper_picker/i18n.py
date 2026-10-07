@@ -157,4 +157,18 @@ _STRINGS = {
     "环境变量 LWE_WORKSHOP 已设置，优先于此处（当前：{}）": {
         "en": "The LWE_WORKSHOP environment variable is set and takes "
               "priority (currently: {})"},
+    # ---- 多显示器 ----
+    "应用到显示器": {"en": "Apply to display"},
+    "所有屏（克隆）": {"en": "All displays (clone)"},
+    "主屏": {"en": "Primary display"},
+    "{}（主）": {"en": "{} (primary)"},
+    "使用中 · {} 块屏 · ": {"en": "In use on {} displays · "},
+    "正在使用：{}（主屏）+ {}　·　共 {} 张壁纸": {
+        "en": "Using: {} (primary) + {}　·　{} wallpapers total"},
+    "显示器": {"en": "Displays"},
+    "所有显示器使用同一壁纸": {
+        "en": "Use the same wallpaper on all displays"},
+    "关闭后可在主窗口逐屏选择不同的壁纸": {
+        "en": "Turn off to pick a different wallpaper per display "
+              "from the main window"},
 }
