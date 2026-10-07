@@ -179,6 +179,94 @@ def wallpaper_bg_arg(wid):
     return wid
 
 
+def _update_state_settings(updates):
+    """读-改-写 settings.json（原子替换），供启动器回写多屏意图。
+
+    与 picker.save_settings 同样的 tmp+rename 手法。GUI 若同时开着，
+    其写盘防抖理论上可能覆盖此处写入——窗口极小，且界面内的多屏操作
+    走 picker 自身的保存路径，不经过这里。
+    """
+    path = state_settings_path()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        data = {}
+    data.update(updates)
+    try:
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        pass    # 写不进（只读盘等）不影响本次启动
+
+
+def plan_launch(bg_id=None, explicit=None, all_screens=False, write_back=True):
+    """决定每块屏用哪张壁纸，返回 [(connector, bg_arg), ...] 覆盖全部已连接屏。
+
+    bg_id     位置参数壁纸（ID 或自定义目录名），应用到主屏——克隆模式下
+              应用到全部屏
+    explicit  [(connector, wid)] 显式逐屏指定（--screen 参数，出现即视为
+              脱离克隆，进入逐屏模式）
+    all_screens  显式克隆意图（--all-screens），全部屏统一用 bg_id 并把
+              clone=true 写回设置
+
+    每块屏的壁纸优先级：显式指定 > settings["screens"] 映射 > bg_id
+    （主屏兜底 = 克隆语义）。write_back 时把意图写回 settings（clone 键、
+    screens 键、last），下次登录恢复与界面概览才有一致依据。返回值里的
+    壁纸已经过 wallpaper_bg_arg 归属判定（Steam 壁纸为 ID、自定义目录
+    壁纸为完整路径），可直接作为渲染器 --bg 的值。
+    """
+    screens = find_screens()
+    connectors = [c for c, _p in screens] or ["eDP-1"]
+    primary = next((c for c, p in screens if p), connectors[0])
+
+    try:
+        with open(state_settings_path(), encoding="utf-8") as fh:
+            settings = json.load(fh)
+    except Exception:
+        settings = {}
+    prev_screens = settings.get("screens") or {}
+    last = settings.get("last")
+
+    updates = {}
+    if all_screens or (explicit is None and settings.get("clone", True)):
+        # 克隆：全部屏统一一张（显式 --all-screens 用 bg_id；默认克隆路径
+        # 同样以 bg_id 为源——它就是用户刚点的那张）
+        source = bg_id or (explicit[0][1] if explicit else None) or last
+        if all_screens:
+            updates["clone"] = True
+            updates["screens"] = {}
+        plan = [(c, source) for c in connectors]
+    elif explicit:
+        mapping = {c: w for c, w in explicit}
+        for c in connectors:
+            if c not in mapping:
+                mapping[c] = prev_screens.get(c) or bg_id or last
+        plan = [(c, mapping[c]) for c in connectors]
+        updates["clone"] = False
+        # 只保留仍连接的屏的映射，失效 connector（换接口等）不残留
+        updates["screens"] = {c: mapping[c] for c in connectors}
+    else:
+        # 无显式参数：本次的壁纸覆盖主屏（用户点的那张），其余屏按
+        # settings.screens 逐屏，没有映射的屏回落主屏壁纸（克隆语义）
+        prev_map = prev_screens
+        plan = []
+        for c, is_primary in screens:
+            if is_primary:
+                plan.append((c, bg_id or prev_map.get(c) or last))
+            else:
+                plan.append((c, prev_map.get(c) or bg_id or last))
+
+    if bg_id:
+        updates["last"] = bg_id
+    if write_back and updates:
+        _update_state_settings(updates)
+
+    return [(c, wallpaper_bg_arg(w)) for c, w in plan]
+
+
 def find_assets():
     """返回 Wallpaper Engine 本体的 assets 目录（渲染器需要，用于场景壁纸）。"""
     override = os.environ.get("LWE_ASSETS")
@@ -341,5 +429,25 @@ if __name__ == "__main__":
         # 多显示器支持：每行一个 connector，主屏带 * 标记
         for connector, primary in find_screens():
             print(f"{connector}{' *' if primary else ''}")
+    elif action == "launch":
+        # start-wallpaper.sh 专用：决定每块屏用哪张壁纸并回写设置意图。
+        # argv: launch [--all-screens] [--screen CONNECTOR ID]... [BG_ID]
+        # 输出: 每行 "CONNECTOR<TAB>BG_ARG"（bg_arg 已做归属判定）
+        launch_args = sys.argv[2:]
+        bg_id, explicit, all_screens = None, [], False
+        i = 0
+        while i < len(launch_args):
+            if launch_args[i] == "--all-screens":
+                all_screens = True
+                i += 1
+            elif launch_args[i] == "--screen" and i + 2 < len(launch_args):
+                # --screen 后需要两个参数，i+2 是它们的最后一个有效索引
+                explicit.append((launch_args[i + 1], launch_args[i + 2]))
+                i += 3
+            else:
+                bg_id = launch_args[i]
+                i += 1
+        for connector, wid in plan_launch(bg_id, explicit or None, all_screens):
+            print(f"{connector}\t{wid}")
     else:
         print(report())

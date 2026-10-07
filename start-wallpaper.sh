@@ -3,8 +3,12 @@
 #
 # 用法:
 #   ./start-wallpaper.sh --list              列出所有可用壁纸
-#   ./start-wallpaper.sh 3050160027          按 ID 启动
+#   ./start-wallpaper.sh 3050160027          按 ID 启动（应用到主屏，
+#                                            其余屏按设置里的多屏意图）
 #   ./start-wallpaper.sh 芙莉莲               按名称关键词启动
+#   ./start-wallpaper.sh --all-screens ID    克隆到全部已连接的显示器
+#   ./start-wallpaper.sh --screen HDMI-1 ID1 --screen eDP-1 ID2
+#                                            逐屏指定（可只给部分屏）
 #   ./start-wallpaper.sh --stop              停止当前壁纸
 #   ./start-wallpaper.sh --status            查看运行状态
 #
@@ -30,12 +34,8 @@ if [ -f "$SCRIPT_DIR/wallpaper_picker/paths.py" ]; then
 fi
 BIN="${BIN:-${LWE_BIN:-$HOME/linux-wallpaperengine/build/output/linux-wallpaperengine}}"
 
-# 显示器名没有通用常量，向 Mutter 查当前主屏；查不到才回落到 eDP-1。
-# 同样可以用 LWE_SCREEN 覆盖。
-if [ -f "$SCRIPT_DIR/wallpaper_picker/paths.py" ]; then
-    DETECTED_SCREEN="$(python3 "$SCRIPT_DIR/wallpaper_picker/paths.py" screen 2>/dev/null)"
-fi
-SCREEN="${LWE_SCREEN:-${DETECTED_SCREEN:-eDP-1}}"
+# LWE_SCREEN 只在多屏计划失效回落单屏时作为主屏名使用（launch 通常覆盖它）
+SCREEN="${LWE_SCREEN:-$(python3 "$SCRIPT_DIR/wallpaper_picker/paths.py" screen 2>/dev/null || echo eDP-1)}"
 STATE_DIR="${LWE_STATE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/wallpaper-picker}"
 LIST="$STATE_DIR/wallpapers.txt"
 LOG="$STATE_DIR/wallpaper.log"
@@ -168,31 +168,52 @@ if [ ! -x "$BIN" ]; then
     exit 1
 fi
 
-# 解析壁纸参数：纯数字当 ID，否则按标题模糊匹配
-ARG="$1"; shift
-if [[ "$ARG" =~ ^[0-9]+$ ]]; then
-    BG="$ARG"
-else
-    refresh_list >&2
-    # -F 按字面匹配：标题里常带 [4K] (汉化) 这类括号，当正则解释必错
-    BG="$(grep -iF -- "$ARG" "$LIST" | head -1 | cut -f1)"
-    if [ -z "$BG" ]; then
-        echo "没找到匹配 '$ARG' 的壁纸，用 --list 看看有哪些" >&2
-        exit 1
+# 前导多屏参数（必须出现在壁纸参数之前）：--all-screens 克隆到全部
+# 已连接屏；--screen CONNECTOR ID 逐屏指定（可重复，出现即脱离克隆）。
+ALL_SCREENS=""
+EXPLICIT=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --all-screens) ALL_SCREENS=1; shift;;
+        --screen) EXPLICIT+=("--screen" "$2" "$3"); shift 3;;
+        *) break;;
+    esac
+done
+
+# 位置参数是壁纸：纯数字当 ID，否则按标题模糊匹配。纯 --screen 模式
+# 可以没有它（此时未指定的屏回落 settings.screens 或上次的壁纸）。
+BG=""
+ARG="${1:-}"
+[ $# -gt 0 ] && shift
+if [ -n "$ARG" ]; then
+    if [[ "$ARG" =~ ^[0-9]+$ ]]; then
+        BG="$ARG"
+    else
+        refresh_list >&2
+        # -F 按字面匹配：标题里常带 [4K] (汉化) 这类括号，当正则解释必错
+        BG="$(grep -iF -- "$ARG" "$LIST" | head -1 | cut -f1)"
+        if [ -z "$BG" ]; then
+            echo "没找到匹配 '$ARG' 的壁纸，用 --list 看看有哪些" >&2
+            exit 1
+        fi
+        echo "匹配到: $(grep -- "$BG" "$LIST" | cut -f3)"
     fi
-    echo "匹配到: $(grep -- "$BG" "$LIST" | cut -f3)"
+fi
+if [ -z "$BG" ] && [ ${#EXPLICIT[@]} -eq 0 ]; then
+    echo "用法: $0 [--all-screens | --screen 连接器 ID ...] [壁纸ID或名称]" >&2
+    exit 1
 fi
 
-# 渲染器对 --bg 的语义（translateBackground）：值含 / 按文件路径，
-# 纯数字固定去 Steam 工坊找。自定义壁纸目录（设置里的 workshop）不在
-# Steam 工坊下，必须传完整路径；Steam 订阅的壁纸维持传 ID。
-WORKSHOP_DIR="$(find_workshop 2>/dev/null)"
-STEAM_WS="$(python3 "$SCRIPT_DIR/wallpaper_picker/paths.py" steam-workshop 2>/dev/null)"
-if [ -n "$STEAM_WS" ] && [ -d "$STEAM_WS/$BG" ]; then
-    :   # Steam 订阅壁纸，渲染器自己能按 ID 找到
-elif [ -n "$WORKSHOP_DIR" ] && [ "$WORKSHOP_DIR" != "$STEAM_WS" ] \
-        && [ -d "$WORKSHOP_DIR/$BG" ]; then
-    BG="$WORKSHOP_DIR/$BG"
+# 每块屏用哪张壁纸：由 paths.py 的 launch 计划决定（settings 里的
+# clone/screens/last + 本次参数），并回写意图供下次恢复与界面概览一致；
+# 返回值已完成归属判定（Steam 壁纸为 ID、自定义目录壁纸为完整路径）。
+mapfile -t PLAN < <(python3 "$SCRIPT_DIR/wallpaper_picker/paths.py" launch \
+    ${ALL_SCREENS:+--all-screens} \
+    ${EXPLICIT[@]+"${EXPLICIT[@]}"} \
+    ${BG:+"$BG"})
+if [ ${#PLAN[@]} -eq 0 ] || [ -z "${PLAN[0]}" ]; then
+    echo "无法确定显示器计划（paths.py launch 无输出）" >&2
+    exit 1
 fi
 
 # 先停掉旧实例。轮询等它真的退出（通常几十毫秒），而不是固定 sleep 1——
@@ -207,14 +228,21 @@ done
 # 的屏。SIGKILL 对 S 状态进程必杀，作为兜底。
 pkill -9 -f "linux-wallpaperengine.*--gnome" 2>/dev/null || true
 
-# 从设置文件生成参数；命令行透传的参数放最后，可以覆盖设置里的值
-mapfile -t FLAGS < <(build_flags "$BG")
+# 拼装渲染器参数：每屏一组 --screen-root/--bg + 该屏壁纸自己的 flags
+# （音量/属性是逐壁纸的，fps/scaling 跟随前面的 --screen-root，逐屏重复
+# 同值无害）。渲染器是单进程管理全部屏。
+SCREEN_LIST=""
+RENDER_ARGS=()
+while IFS=$'\t' read -r conn wid; do
+    [ -n "$conn" ] || continue
+    SCREEN_LIST="$SCREEN_LIST $conn"
+    mapfile -t F < <(build_flags "$wid")
+    RENDER_ARGS+=(--screen-root "$conn" --bg "$wid" ${F[@]+"${F[@]}"})
+done < <(printf '%s\n' "${PLAN[@]}")
 
 nohup "$BIN" \
     --gnome \
-    --screen-root "$SCREEN" \
-    --bg "$BG" \
-    ${FLAGS[@]+"${FLAGS[@]}"} \
+    ${RENDER_ARGS[@]+"${RENDER_ARGS[@]}"} \
     "$@" \
     > "$LOG" 2>&1 &
 
@@ -234,7 +262,7 @@ for _ in $(seq 1 "$STARTUP_GRACE"); do
 done
 
 if [ "$alive" = 1 ]; then
-    echo "壁纸已启动 (PID $(cat "$PIDFILE")，显示器 $SCREEN)"
+    echo "壁纸已启动 (PID $(cat "$PIDFILE")，屏:${SCREEN_LIST:-$SCREEN})"
     echo "日志: $LOG"
 else
     echo "启动失败，日志末尾:" >&2
