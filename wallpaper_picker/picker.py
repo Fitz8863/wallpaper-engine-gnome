@@ -100,10 +100,15 @@ DEFAULT_SETTINGS = {
     "close_action": "tray",  # 关闭窗口：tray=隐藏到托盘 / quit=退出
     "language": "system",    # 界面语言：system/zh/en
     "workshop": None,        # 手动选择的壁纸目录；None = 自动探测
+    # 多显示器：clone=true 时所有屏用同一张（官方 Clone 模式，接新屏的
+    # 默认行为）；clone=false 时按 screens{connector: 壁纸ID} 逐屏，缺失
+    # 的屏回落主屏壁纸。音量/属性仍按壁纸 ID（两屏同壁纸共享设置）。
+    "clone": True,
+    "screens": {},
 }
 
 # 值是字典的键，读盘时要单独处理，不能直接覆盖
-NESTED_SETTINGS = ("volumes", "properties")
+NESTED_SETTINGS = ("volumes", "properties", "screens")
 
 # 渲染器 --scaling 的合法取值（实测自 "allowed options" 报错信息）
 SCALING_CHOICES = [

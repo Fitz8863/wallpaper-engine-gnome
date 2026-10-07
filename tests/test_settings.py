@@ -49,3 +49,17 @@ def test_settings_roundtrip(picker_mod, tmp_path):
     disk = picker_mod.load_settings()
     assert disk["fps"] == 25
     assert disk["volumes"]["123"] == 7
+
+
+def test_multimonitor_defaults(picker_mod):
+    s = picker_mod.load_settings()
+    assert s["clone"] is True          # 接新屏默认克隆（官方 Clone 模式）
+    assert s["screens"] == {}
+
+
+def test_legacy_file_gets_multimonitor_defaults(picker_mod):
+    write_settings(picker_mod, {"volume": 30, "last": "123"})
+    s = picker_mod.load_settings()
+    assert s["clone"] is True
+    assert s["screens"] == {}
+    assert s["last"] == "123"
