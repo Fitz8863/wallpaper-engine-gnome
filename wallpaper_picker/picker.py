@@ -864,11 +864,11 @@ class WallpaperPicker(Adw.ApplicationWindow):
         self.row_volume.set_sensitive(False)   # 没选中壁纸时不知道音量存给谁
         own_group.add(self.row_volume)
 
-        # ---- 应用到显示器（多屏；单屏时只有「主屏」一项，无感）----
-        # 选择在点「应用」时生效：克隆=全部屏同一张；主屏=本次壁纸覆盖
-        # 主屏；具体 connector=该屏单独换（其余屏按设置保留）。
-        self._scope_keys, scope_choices = ["clone", "primary"], [
-            ("clone", tr("所有屏（克隆）")), ("primary", tr("主屏"))]
+        # ---- 应用到显示器（多屏；单屏时只有一项，无感）----
+        # 选择在点「应用」时生效：克隆=全部屏同一张；具体 connector=只换
+        # 该屏（其余屏按设置保留；带（主）标记的就是主屏）。
+        self._scope_keys, scope_choices = ["clone"], [
+            ("clone", tr("所有屏（克隆）"))]
         for conn, primary in find_screens():
             self._scope_keys.append(conn)
             scope_choices.append(
@@ -877,7 +877,8 @@ class WallpaperPicker(Adw.ApplicationWindow):
             tr("应用到显示器"), scope_choices, self._scope_keys[0],
             lambda _v: None)
         if not self.settings.get("clone", True):
-            # 逐屏模式初始停在「主屏」，暗示这次应用只会覆盖主屏
+            # 逐屏模式初始停在主屏的 connector（列表主屏在最前），
+            # 暗示这次应用只会覆盖主屏
             self.screen_scope._dropdown.set_selected(1)
         own_group.add(self.screen_scope)
         # ---- 播放设置（全局，收进折叠分组省空间）----
@@ -1521,7 +1522,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
         if scope == "clone":
             self.settings["clone"] = True
             self.settings["screens"] = {}
-        elif scope not in (None, "primary"):
+        elif scope:
             self.settings["clone"] = False
             self.settings.setdefault("screens", {})[scope] = wall.wid
         self.settings["last"] = wall.wid
@@ -1556,10 +1557,10 @@ class WallpaperPicker(Adw.ApplicationWindow):
 
         if scope == "clone":
             args = ["--all-screens", wall.wid]
-        elif scope not in (None, "primary"):
+        elif scope:
             args = ["--screen", scope, wall.wid]
         else:
-            args = [wall.wid]
+            args = [wall.wid]   # 兜底:无选择时按主屏语义
         self.run_script_async(args, done)
 
     def on_stop(self, _btn):
