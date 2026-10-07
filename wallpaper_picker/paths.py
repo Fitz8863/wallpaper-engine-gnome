@@ -198,16 +198,31 @@ def find_renderer():
     return os.environ.get("LWE_BIN") or DEFAULT_RENDERER
 
 
-def find_screen():
-    """返回主显示器的连接器名（如 eDP-1 / HDMI-1 / DP-2）。
+def parse_logical_monitors(logical):
+    """把 Mutter 的 logical_monitors 列表解析成 [(connector, is_primary), ...]。
 
-    这个值没有通用常量——笔记本内置屏通常是 eDP-1，外接屏可能是别的名字。
-    所以这里向 Mutter 查询当前的主显示器，而不是猜。查不到才回落到 eDP-1。
+    输入每项形如 (x, y, scale, transform, primary, [monitors], props)，
+    refs 里每项是 (connector, vendor, product, serial)。输出主屏排最前，
+    其余按屏幕位置（先 y 后 x）排序——与用户「从左到右」的直觉一致，
+    界面上按这个顺序展示。纯函数，喂构造数据即可测试。
     """
-    override = os.environ.get("LWE_SCREEN")
-    if override:
-        return override
+    parsed = []
+    for entry in logical:
+        refs = entry[5] if len(entry) > 5 else []
+        if not refs:
+            continue
+        parsed.append({
+            "connector": refs[0][0],
+            "primary": bool(entry[4]),
+            "x": entry[0],
+            "y": entry[1],
+        })
+    parsed.sort(key=lambda s: (not s["primary"], s["y"], s["x"]))
+    return [(s["connector"], s["primary"]) for s in parsed]
 
+
+def _query_mutter_screens():
+    """向 Mutter 查询全部逻辑显示器，失败返回 None。"""
     try:
         # 只在需要时导入 gi，避免拖慢 workshop/renderer 这类查询
         from gi.repository import Gio
@@ -219,20 +234,37 @@ def find_screen():
             "org.gnome.Mutter.DisplayConfig",
             "GetCurrentState",
             None, None, Gio.DBusCallFlags.NONE, 5000, None)
-
-        # 返回签名大致是 (serial, monitors, logical_monitors, properties)，
-        # logical_monitors 每项形如 (x, y, scale, transform, primary, [monitors], props)
-        _serial, _monitors, logical = reply.unpack()[:3]
-        for entry in logical:
-            primary, refs = entry[4], entry[5]
-            if primary and refs:
-                # refs 里每项形如 (connector, vendor, product, serial)
-                return refs[0][0]
-        if logical and logical[0][5]:
-            return logical[0][5][0][0]
+        return parse_logical_monitors(reply.unpack()[2])
     except Exception:
-        pass
+        return None
 
+
+def find_screens():
+    """返回全部显示器 [(connector, is_primary), ...]，主屏排最前。
+
+    多显示器支持的探测基础：渲染器可以逐屏指定 --screen-root，
+    界面按这里给出的顺序展示与命名各块屏。Mutter 查询失败时回落
+    到单屏（LWE_SCREEN 或 eDP-1，视为主屏）——单屏行为永远可用。
+    """
+    screens = _query_mutter_screens()
+    if screens:
+        return screens
+    return [(os.environ.get("LWE_SCREEN") or "eDP-1", True)]
+
+
+def find_screen():
+    """返回主显示器的连接器名（如 eDP-1 / HDMI-1 / DP-2）。
+
+    这个值没有通用常量——笔记本内置屏通常是 eDP-1，外接屏可能是别的名字。
+    所以这里向 Mutter 查询当前的主显示器，而不是猜。查不到才回落到 eDP-1。
+    """
+    override = os.environ.get("LWE_SCREEN")
+    if override:
+        return override
+
+    for connector, primary in find_screens():
+        if primary:
+            return connector
     return "eDP-1"
 
 
@@ -273,8 +305,9 @@ def report():
     lines.append(f"  {renderer}（{exists}）")
 
     lines.append("")
-    lines.append("主显示器：")
-    lines.append(f"  {find_screen()}")
+    lines.append("显示器（* 为主屏）：")
+    for connector, primary in find_screens():
+        lines.append(f"  {connector}{' *' if primary else ''}")
     return "\n".join(lines)
 
 
@@ -304,5 +337,9 @@ if __name__ == "__main__":
         print(find_renderer())
     elif action == "screen":
         print(find_screen())
+    elif action == "screens":
+        # 多显示器支持：每行一个 connector，主屏带 * 标记
+        for connector, primary in find_screens():
+            print(f"{connector}{' *' if primary else ''}")
     else:
         print(report())
