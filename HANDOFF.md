@@ -243,6 +243,18 @@ Blank Stare 的音乐播放器区域）。补丁 `patches/0002-*.patch`：按语
 import（保留动态 `import()` 调用）。已实测 2897629925 的 SyntaxError 消失、
 pokemon/伊蕾娜回归正常。同类问题（层失效→白块/默认贴图）优先查这里。
 
+**比例失配的屏幕上壁纸底部被拉成条纹（DefaultUVs 数学 bug，已修）**
+
+scene 素材与屏幕宽高比不同时（16:9 壁纸放 16:10 屏，或窗口模式 4:3），
+壁纸底部出现一条模糊拉伸带。根因在渲染器 `WallpaperState.cpp` 的
+`DefaultUVs`：它用**宽高数值**而非**宽高比**判断裁切轴，视口与投影比例
+不一致时算出越界 UV（如 v=[-0.167, 1.167]），越界部分被 GL clamp 成
+条纹。实测 `--scaling fill` 的数学是对的，default 是错的——但 default
+是大量用户的实际设置。修复 = 按宽高比选裁切轴（patches/0003，
+渲染器本地提交 8a5ddba），修复后所有比例失配场景与 fill 行为一致。
+调试手段：临时给 `updateState` 加 sLog.out 打印 viewport/projection，
+再在 render() 打印最终 UV，对照数学即可定位分支。
+
 **网页壁纸起不来：CEF 三层问题（上游范畴，已推进两层）**
 
 症状：web 类壁纸「启动成功」却永远没有画面——进程活着、无报错、无 CEF
@@ -263,9 +275,9 @@ pokemon/伊蕾娜回归正常。同类问题（层失效→白块/默认贴图�
    socketpair——没有任何 CEF 子进程被创建，浏览器构建流程未开始。
    属 CEF 135 + Wayland/NVIDIA 的深层问题，等待上游输入。
 
-渲染器源码里的实验性改动（WebBrowserContext.cpp / BrowserApp.cpp /
-CWeb.cpp）**未固化为 patches/0003**——web 尚未跑通，且改动未全部验证；
-视频/场景壁纸已回归验证不受影响。后续：上游回应后继续，或深挖
+渲染器源码里的 web 实验性改动（WebBrowserContext.cpp / BrowserApp.cpp /
+CWeb.cpp）保持未提交——web 尚未跑通；视频/场景壁纸已回归验证不受影响。
+**patches/0003 已被另一个修复占用**：DefaultUVs 的宽高比判断 bug（见下）。后续：上游回应后继续，或深挖
 CefInitialize 挂起点（gdb 异步 interrupt + 全线程 bt 是下一步手段）。
 
 **渲染器参数的重复性（多屏拼装的硬约束）**

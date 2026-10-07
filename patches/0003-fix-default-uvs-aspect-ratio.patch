@@ -1,0 +1,51 @@
+From 8a5ddba9724009a60bb9a921bc8c64b5544fb963 Mon Sep 17 00:00:00 2001
+From: Fitz <13725071087@163.com>
+Date: Wed, 7 Oct 2026 19:25:57 +0800
+Subject: [PATCH] fix(DefaultUVs): compare aspect ratios instead of raw
+ dimensions
+
+The old logic compared viewport width/height against the projection's,
+picking the wrong crop axis whenever the two have different aspect
+ratios (e.g. a 16:9 wallpaper on a 16:10 screen). That produced UVs
+outside [0,1], which GL clamps into smeared stripes at the screen
+edges. Compare aspect ratios instead: viewport relatively taller ->
+crop horizontally, relatively wider -> crop vertically. This matches
+Wallpaper Engine's default behavior of covering the screen while
+preserving the wallpaper's aspect ratio.
+---
+ src/WallpaperEngine/Render/WallpaperState.cpp | 18 ++++++++++++------
+ 1 file changed, 12 insertions(+), 6 deletions(-)
+
+diff --git a/src/WallpaperEngine/Render/WallpaperState.cpp b/src/WallpaperEngine/Render/WallpaperState.cpp
+index 6f9dc1a..27add94 100644
+--- a/src/WallpaperEngine/Render/WallpaperState.cpp
++++ b/src/WallpaperEngine/Render/WallpaperState.cpp
+@@ -119,13 +119,19 @@ template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScal
+     const int projectionWidth = this->getProjectionWidth ();
+     const int projectionHeight = this->getProjectionHeight ();
+ 
+-    if ((viewportHeight > viewportWidth && projectionWidth >= projectionHeight)
+-	|| (viewportWidth > viewportHeight && projectionHeight > projectionWidth)) {
++    // The viewport must always be fully covered, so the comparison has to
++    // be between aspect ratios — comparing raw width/height against each
++    // other (the old logic) picks the wrong axis whenever the viewport and
++    // the projection have different aspect ratios, producing UVs outside
++    // [0,1] that GL clamps into smeared stripes at the screen edges.
++    // Viewport relatively taller than the projection -> crop horizontally;
++    // otherwise crop vertically.
++    const float viewportAR = static_cast<float> (viewportWidth) / viewportHeight;
++    const float projectionAR = static_cast<float> (projectionWidth) / projectionHeight;
++
++    if (viewportAR < projectionAR) {
+ 	updateUs (projectionWidth, projectionHeight);
+-    }
+-
+-    if ((viewportWidth > viewportHeight && projectionWidth >= projectionHeight)
+-	|| (viewportHeight > viewportWidth && projectionHeight > projectionWidth)) {
++    } else if (viewportAR > projectionAR) {
+ 	updateVs (projectionWidth, projectionHeight);
+     }
+ }
+-- 
+2.43.0
+
