@@ -44,63 +44,6 @@ SETTINGS="$STATE_DIR/settings.json"
 
 mkdir -p "$STATE_DIR"
 
-# 把 settings.json 翻译成渲染器参数。
-# 图形化选择器改的就是这份配置，所以界面和命令行的行为保持一致。
-build_flags() {
-    local wid="$1"
-    [ -f "$SETTINGS" ] || return 0
-    python3 - "$SETTINGS" "$wid" <<'PY'
-import json, sys
-
-path, wid = sys.argv[1], sys.argv[2]
-try:
-    cfg = json.load(open(path, encoding='utf-8'))
-except Exception:
-    sys.exit(0)
-
-flags = []
-RENDERER_DEFAULT_VOLUME = 15
-if cfg.get('silent'):
-    flags.append('--silent')
-
-# 音量是逐壁纸的。三种情况都要兼容：
-#   volumes[wid]      当前格式
-#   volume_default    当前格式的兜底值
-#   volume            旧格式的全局音量（用户可能还没打开过新版界面）
-volumes = cfg.get('volumes') or {}
-if wid in volumes:
-    volume = volumes[wid]
-elif 'volume_default' in cfg:
-    volume = cfg['volume_default']
-else:
-    volume = cfg.get('volume', RENDERER_DEFAULT_VOLUME)
-if isinstance(volume, (int, float)) and int(volume) != RENDERER_DEFAULT_VOLUME:
-    flags += ['--volume', str(int(volume))]
-
-fps = cfg.get('fps')
-if isinstance(fps, (int, float)):
-    flags += ['--fps', str(int(fps))]
-
-scaling = cfg.get('scaling')
-if scaling and scaling != 'default':
-    flags += ['--scaling', str(scaling)]
-
-# 渲染器默认会在其他程序出声时自动静音壁纸；关掉这个行为要显式传参
-if cfg.get('automute') is False:
-    flags.append('--noautomute')
-
-for key, disabled in (('particles', '--disable-particles'),
-                      ('parallax', '--disable-parallax'),
-                      ('mouse', '--disable-mouse')):
-    if cfg.get(key) is False:
-        flags.append(disabled)
-
-for name, value in (cfg.get('properties') or {}).get(wid, {}).items():
-    flags += ['--set-property', f'{name}={value}']
-
-print('\n'.join(flags))
-PY
-}
 
 # 在常见的 Steam 安装布局里找创意工坊目录。
 # 探测逻辑放在 wallpaper_picker/paths.py 里（会读 libraryfolders.vdf，因此 Steam 库
@@ -208,14 +151,16 @@ if [ -z "$BG" ] && [ ${#EXPLICIT[@]} -eq 0 ] && [ "$APPLY_PLAN" != 1 ]; then
     exit 1
 fi
 
-# 每块屏用哪张壁纸：由 paths.py 的 launch 计划决定（settings 里的
-# clone/screens/last + 本次参数），并回写意图供下次恢复与界面概览一致；
-# 返回值已完成归属判定（Steam 壁纸为 ID、自定义目录壁纸为完整路径）。
-mapfile -t PLAN < <(python3 "$SCRIPT_DIR/wallpaper_picker/paths.py" launch \
+# 渲染器完整参数（每屏 --screen-root/--bg + 逐屏 flags + 进程级参数）：
+# 由 paths.py 的 launch 一次性决定——settings 里的 clone/screens/last +
+# 本次参数算出计划，展开成参数并以 NUL 分隔输出。在 bash 里做「flag 组
+# 级」的拼装/去重（值可能含空格）不可靠，曾把属性值漏成位置参数导致
+# 渲染器把它当 --bg 解析而崩溃，所以组装整体放在 Python 侧。
+mapfile -d '' -t RENDER_ARGS < <(python3 "$SCRIPT_DIR/wallpaper_picker/paths.py" launch \
     ${ALL_SCREENS:+--all-screens} \
     ${EXPLICIT[@]+"${EXPLICIT[@]}"} \
     ${BG:+"$BG"})
-if [ ${#PLAN[@]} -eq 0 ] || [ -z "${PLAN[0]}" ]; then
+if [ ${#RENDER_ARGS[@]} -eq 0 ] || [ -z "${RENDER_ARGS[0]}" ]; then
     echo "无法确定显示器计划（paths.py launch 无输出）" >&2
     exit 1
 fi
@@ -232,17 +177,13 @@ done
 # 的屏。SIGKILL 对 S 状态进程必杀，作为兜底。
 pkill -9 -f "linux-wallpaperengine.*--gnome" 2>/dev/null || true
 
-# 拼装渲染器参数：每屏一组 --screen-root/--bg + 该屏壁纸自己的 flags
-# （音量/属性是逐壁纸的，fps/scaling 跟随前面的 --screen-root，逐屏重复
-# 同值无害）。渲染器是单进程管理全部屏。
+# 从参数列表里提取屏幕名给成功消息用（--screen-root 的下一个 token）
 SCREEN_LIST=""
-RENDER_ARGS=()
-while IFS=$'\t' read -r conn wid; do
-    [ -n "$conn" ] || continue
-    SCREEN_LIST="$SCREEN_LIST $conn"
-    mapfile -t F < <(build_flags "$wid")
-    RENDER_ARGS+=(--screen-root "$conn" --bg "$wid" ${F[@]+"${F[@]}"})
-done < <(printf '%s\n' "${PLAN[@]}")
+prev=""
+for a in ${RENDER_ARGS[@]+"${RENDER_ARGS[@]}"}; do
+    [ "$prev" = "--screen-root" ] && SCREEN_LIST="$SCREEN_LIST $a"
+    prev="$a"
+done
 
 nohup "$BIN" \
     --gnome \

@@ -202,6 +202,77 @@ def _update_state_settings(updates):
         pass    # 写不进（只读盘等）不影响本次启动
 
 
+def _settings_flags(cfg, wid, mode, seen_props=None):
+    """单屏壁纸的 flag 组列表：[("--silent",), ("--volume", "30"), ...]。
+
+    mode=all 含进程级参数（--silent/--fps/--volume/开关，渲染器不允许
+    重复）；两种模式都含逐屏参数（--scaling 与该屏壁纸的属性，允许
+    重复）。seen_props 用于多屏去重：同名属性只保留最前面屏的
+    （渲染器按属性名覆盖，跨壁纸同名会互相污染）。
+    """
+    groups = []
+    if mode == "all":
+        if cfg.get("silent"):
+            groups.append(("--silent",))
+
+        volumes = cfg.get("volumes") or {}
+        if wid in volumes:
+            volume = volumes[wid]
+        elif "volume_default" in cfg:
+            volume = cfg["volume_default"]
+        else:
+            volume = cfg.get("volume", 15)
+        if isinstance(volume, (int, float)) and int(volume) != 15:
+            groups.append(("--volume", str(int(volume))))
+
+        fps = cfg.get("fps")
+        if isinstance(fps, (int, float)):
+            groups.append(("--fps", str(int(fps))))
+
+        if cfg.get("automute") is False:
+            groups.append(("--noautomute",))
+
+        for key, disabled in (("particles", "--disable-particles"),
+                              ("parallax", "--disable-parallax"),
+                              ("mouse", "--disable-mouse")):
+            if cfg.get(key) is False:
+                groups.append((disabled,))
+
+    scaling = cfg.get("scaling")
+    if scaling and scaling != "default":
+        groups.append(("--scaling", str(scaling)))
+
+    for name, value in (cfg.get("properties") or {}).get(wid, {}).items():
+        if seen_props is not None:
+            if name in seen_props:
+                continue
+            seen_props.add(name)
+        groups.append(("--set-property", f"{name}={value}"))
+
+    return groups
+
+
+def build_render_args(plan, settings=None):
+    """把多屏计划展开成渲染器完整参数列表（不含 --gnome，调用方添加）。
+
+    进程级参数只随第一块屏传一次；--scaling 与属性逐屏重复；跨屏同名
+    属性主屏优先。全列表按组返回，调用方逐组展开（组内 token 是完整
+    的，属性值含空格也安全）。
+    """
+    cfg = settings if settings is not None else {}
+    args = []
+    seen_props = set()
+    for i, (conn, bg) in enumerate(plan):
+        args += ["--screen-root", conn, "--bg", bg]
+        # properties/volumes 的键是壁纸目录名；bg 可能已被归属判定转成
+        # 完整路径（自定义目录壁纸），basename 对两种形态都能对回键
+        wid = os.path.basename(bg)
+        mode = "all" if i == 0 else "screen"
+        for group in _settings_flags(cfg, wid, mode, seen_props):
+            args += list(group)
+    return args
+
+
 def plan_launch(bg_id=None, explicit=None, all_screens=False, write_back=True):
     """决定每块屏用哪张壁纸，返回 [(connector, bg_arg), ...] 覆盖全部已连接屏。
 
@@ -430,9 +501,9 @@ if __name__ == "__main__":
         for connector, primary in find_screens():
             print(f"{connector}{' *' if primary else ''}")
     elif action == "launch":
-        # start-wallpaper.sh 专用：决定每块屏用哪张壁纸并回写设置意图。
+        # start-wallpaper.sh 专用：决定每块屏用哪张壁纸并回写设置意图，
+        # 展开成渲染器完整参数（NUL 分隔，组内 token 含空格也安全）。
         # argv: launch [--all-screens] [--screen CONNECTOR ID]... [BG_ID]
-        # 输出: 每行 "CONNECTOR<TAB>BG_ARG"（bg_arg 已做归属判定）
         launch_args = sys.argv[2:]
         bg_id, explicit, all_screens = None, [], False
         i = 0
@@ -447,7 +518,13 @@ if __name__ == "__main__":
             else:
                 bg_id = launch_args[i]
                 i += 1
-        for connector, wid in plan_launch(bg_id, explicit or None, all_screens):
-            print(f"{connector}\t{wid}")
+        plan = plan_launch(bg_id, explicit or None, all_screens)
+        try:
+            with open(state_settings_path(), encoding="utf-8") as fh:
+                settings = json.load(fh)
+        except Exception:
+            settings = {}
+        args = build_render_args(plan, settings)
+        sys.stdout.buffer.write(b"\0".join(a.encode() for a in args))
     else:
         print(report())
