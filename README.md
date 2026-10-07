@@ -141,20 +141,27 @@ curl -L -C - --retry 10 "$URL" -o "$RENDERER_DIR/build/cef/$(basename "$URL")"
 
 ### 多显示器
 
-默认自动输出到主显示器（向 Mutter 查询）。想输出到副屏时：
+支持每块屏各自的壁纸，或全部屏克隆同一张（对应官方 Wallpaper Engine 的
+Clone 模式）：
+
+- **图形界面**：选中壁纸后，侧栏「应用到显示器」选择目标——所有屏（克隆，
+  默认）/ 主屏 / 某块屏单独更换；「设置 → 显示器」里有克隆开关和每屏概览。
+- **开机恢复**：登录后按上次的意图恢复（克隆 → 全屏同一张；逐屏 → 各屏
+  各自的壁纸）。
+- **命令行**：
 
 ```bash
-export LWE_SCREEN="HDMI-1"     # 显示器名用下面命令查
+./start-wallpaper.sh ID                        # 应用到主屏，其余屏按设置
+./start-wallpaper.sh --all-screens ID          # 克隆到全部已连接的显示器
+./start-wallpaper.sh --screen HDMI-1 ID1 --screen eDP-1 ID2   # 逐屏指定
 ```
 
-```bash
-gdbus call --session --dest org.gnome.Mutter.DisplayConfig \
-  --object-path /org/gnome/Mutter/DisplayConfig \
-  --method org.gnome.Mutter.DisplayConfig.GetResources \
-  | grep -oP "'[a-zA-Z0-9-]+'"
-```
+- 已知限制：克隆模式下同一壁纸在每块屏各渲染一份，**声音会叠加**（渲染器
+  每屏一个音频实例，暂无逐屏静音参数）；接新屏后壁纸不会自动跟随变化，
+  重新选一次壁纸即可。
 
-要永久生效可写进 `~/.profile` 或 `~/.config/environment.d/`。
+显示器名可随时用 `python3 wallpaper_picker/paths.py screens` 查询
+（每行一个，`*` 为主屏）。
 
 ## 配置与数据
 

@@ -268,6 +268,15 @@ CWeb.cpp）**未固化为 patches/0003**——web 尚未跑通，且改动未全
 视频/场景壁纸已回归验证不受影响。后续：上游回应后继续，或深挖
 CefInitialize 挂起点（gdb 异步 interrupt + 全线程 bt 是下一步手段）。
 
+**渲染器参数的重复性（多屏拼装的硬约束）**
+
+实测：`--scaling` 与 `--set-property` 允许重复（逐屏语义，同名属性按名
+覆盖——跨屏壁纸同名属性要主动去重，主屏优先）；`--silent`/`--fps`/
+`--volume` 不允许重复（`Duplicate argument` 直接退出）。所以启动器分两种
+模式拼装：主屏带进程级参数（all），副屏只带逐屏部分（screen）。副作用：
+**多屏时音量只有一份**（取主屏壁纸的），克隆模式同一壁纸两份渲染、声音
+叠加（渲染器每屏一个 mpv 实例，无逐屏静音参数）——均已记为已知限制。
+
 ### 构建
 
 **CEF 下载断流**
@@ -373,9 +382,11 @@ python3 wallpaper_picker/paths.py screen      # 只打印探测到的主显示�
 
 **待办，按价值排序**：
 
-1. **多显示器**——方案已定,见 [docs/multi-monitor.md](docs/multi-monitor.md)。
-   渲染器与扩展端都已就绪,改动全在我们这层。阶段 0(参数化、单屏机器上可
-   做可测)可先行;阶段 1 的 UI 与逐屏设置需要外接显示器真机验证,已排队。
+1. **多显示器**——**阶段 1 已完成并真机验证**（`4e3f0a1..9dafcdd`，方案与
+   限制见 [docs/multi-monitor.md](docs/multi-monitor.md)）：逐屏应用（侧栏
+   下拉 + `--screen`）、克隆模式（默认，`--all-screens`）、设置概览、
+   `--apply-plan` 恢复通道。剩余（阶段 2）：逐屏 fps/scaling/属性、拔插屏
+   热响应、connector 名漂移迁移、克隆模式音频双份（等上游）。
 2. **播放列表界面**——渲染器支持 `--playlist`（读 Wallpaper Engine 的
    `config.json`），界面还没有入口。
 3. ~~修扩展的 `already disposed` 告警~~ ——已完成（`1baa457`，待注销重登验证）。
