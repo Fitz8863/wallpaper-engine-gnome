@@ -72,6 +72,7 @@ const LiveWallpaper = GObject.registerClass({
         this._wallpaper = null;
         this._cloneSource = null;
         this._sourceDestroyId = 0;
+        this._sourceMappedId = 0;
         this._retryId = 0;
         this._destroying = false;
 
@@ -131,6 +132,17 @@ const LiveWallpaper = GObject.registerClass({
             this._clearClone();
             log(`lwpe: renderer gone on monitor ${this._monitorIndex}`);
         });
+        // Lock screen tears the window actor down via unmap (not destroy):
+        // on unlock Mutter remaps it and our clone would keep painting the
+        // stale, unmapped actor — the wallpaper silently disappears while
+        // renderer and clone both look alive.  Watch mapping state and
+        // rebuild the clone through the regular retry tick when the
+        // window comes back.
+        this._sourceMappedId = source.connect('notify::mapped', src => {
+            if (src.mapped) {
+                this._clearClone();
+            }
+        });
         clone.connect('destroy', () => {
             this._wallpaper = null;
         });
@@ -144,14 +156,20 @@ const LiveWallpaper = GObject.registerClass({
     _clearClone() {
         // The source destroy callback resets both ids before calling us,
         // so a live disconnect only happens on teardown paths.
-        if (this._sourceDestroyId && this._cloneSource) {
-            try {
-                this._cloneSource.disconnect(this._sourceDestroyId);
-            } catch (e) {
-                // source already disposed
+        for (const [obj, id] of [
+            [this._cloneSource, this._sourceDestroyId],
+            [this._cloneSource, this._sourceMappedId],
+        ]) {
+            if (obj && id) {
+                try {
+                    obj.disconnect(id);
+                } catch (e) {
+                    // source already disposed
+                }
             }
         }
         this._sourceDestroyId = 0;
+        this._sourceMappedId = 0;
         this._cloneSource = null;
         if (this._wallpaper) {
             const clone = this._wallpaper;
@@ -699,6 +717,26 @@ export class WallpaperManager {
 
         global.lwpeWallpaperManager = this;
 
+        // Session unlock / resume: the shield dialog tears background
+        // actors down and window actors get remapped by Mutter, so clones
+        // may hold stale sources.  Force a rebuild through the same path
+        // as startup (destroy the LiveWallpaper actors; the overridden
+        // _createBackgroundActor recreates them with fresh sources).
+        try {
+            this._lockSignalId = Main.screenShield.connect('lock-screen-shield-changed', () => {
+                const shieldDown = !Main.screenShield.locked;
+                if (shieldDown) {
+                    log('lwpe: unlock detected, rebuilding wallpaper actors');
+                    this._reloadBackgrounds();
+                }
+            });
+        } catch (e) {
+            // Signal name unavailable on this GNOME version; the
+            // notify::mapped watcher and retry tick still cover it.
+            this._lockSignalId = 0;
+            log(`lwpe: lock-screen signal unavailable: ${e.message}`);
+        }
+
         try {
             this._windowManager.enable();
         } catch (e) {
@@ -713,6 +751,14 @@ export class WallpaperManager {
     }
 
     destroy() {
+        if (this._lockSignalId) {
+            try {
+                Main.screenShield.disconnect(this._lockSignalId);
+            } catch (e) {
+                // shield object already gone
+            }
+            this._lockSignalId = 0;
+        }
         this._windowManager.disable();
         this._injectionManager.clear();
         this._reloadBackgrounds();
