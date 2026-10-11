@@ -100,21 +100,8 @@ const LiveWallpaper = GObject.registerClass({
                 const source = this._getSource();
                 if (source) {
                     this._attachClone(source);
-                    this._sourceFailCount = 0;
-                } else {
-                    // A MetaWindowActor can die while its MetaWindow lives
-                    // (extension disable/enable gap, lock screen, session
-                    // idling).  Mutter only rebuilds the actor when the
-                    // window (re)maps, and keepMinimized fights that —
-                    // the result is a live renderer nobody can see and
-                    // no way to self-heal.  Probe for the MetaWindow via
-                    // the window tracker and unminimize once per streak;
-                    // the map event also re-registers it in WindowManager.
-                    this._sourceFailCount = (this._sourceFailCount ?? 0) + 1;
-                    if (this._sourceFailCount === 3) {
-                        log(`lwpe: source missing on monitor ${this._monitorIndex}, probing for live window`);
-                        this._reviveRendererWindow();
-                    }
+                } else if (_firstRun) {
+                    log(`lwpe: no renderer yet for monitor ${this._monitorIndex}, retrying...`);
                 }
             }
 
@@ -126,52 +113,6 @@ const LiveWallpaper = GObject.registerClass({
         // Start the perpetual timer afterwards for wallpaper change detection.
         operation();
         this._retryId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, operation);
-    }
-
-    /**
-     * Try to bring a still-alive renderer window back to a mapped state.
-     *
-     * MetaWindowActor actors are recreated on map; if the compositor
-     * dropped the actor while the MetaWindow survived, unminimizing
-     * (and re-minimizing via ManagedWindow's keepMinimized hook) makes
-     * Mutter build a fresh actor that _getSource can find again.
-     */
-    _reviveRendererWindow() {
-        const windows = global.get_window_actors(false);
-        let candidates = windows.filter(isRendererActor);
-        if (candidates.length === 0) {
-            // window list may also be filtered; walk every workspace's
-            // tab list, which Meta.Display serves straight from its own
-            // window set (bypassing the compositor's actor list)
-            try {
-                const workspaces = global.workspace_manager.get_n_workspaces();
-                for (let i = 0; i < workspaces; i++) {
-                    const ws = global.workspace_manager.get_workspace_by_index(i);
-                    for (const w of global.display.get_tab_list(Meta.TabList.NORMAL_ALL, ws)) {
-                        if (isRendererWindow(w)) {
-                            candidates.push(w);
-                        }
-                    }
-                }
-            } catch (e) {
-                log(`lwpe: tab list walk failed: ${e.message}`);
-            }
-        }
-        if (candidates.length === 0) {
-            log('lwpe: no live renderer window found to revive');
-            return;
-        }
-        candidates.forEach(win => {
-            const window = win.meta_window ?? win;
-            try {
-                if (window.minimized) {
-                    log(`lwpe: unminimizing renderer window "${getWindowTitle(window).substring(0, 30)}"`);
-                    window.unminimize();
-                }
-            } catch (e) {
-                log(`lwpe: revive failed: ${e.message}`);
-            }
-        });
     }
 
     _attachClone(source) {
