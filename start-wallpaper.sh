@@ -81,6 +81,10 @@ case "${1:-}" in
         sleep 0.2
         pkill -9 -f "linux-wallpaperengine.*--gnome" 2>/dev/null && stopped=1
         rm -f "$PIDFILE"
+        # 连守护一起停(它只在壁纸运行时有意义)
+        [ -f "$STATE_DIR/suspend-daemon.pid" ] && \
+            kill "$(cat "$STATE_DIR/suspend-daemon.pid")" 2>/dev/null
+        rm -f "$STATE_DIR/suspend-daemon.pid"
         if [ "$stopped" = 1 ]; then
             # 停止即撤掉登录自启，与图形界面的「停止」按钮行为一致——
             # 用户明确要停，重启后壁纸不该自己回来。再选壁纸时会重建。
@@ -192,6 +196,12 @@ nohup "$BIN" \
     > "$LOG" 2>&1 &
 
 echo $! > "$PIDFILE"
+
+# 挂起唤醒守护:唤醒后显示布局可能被重新协商,渲染器窗口持旧尺寸导致
+# 顶栏/Dock 区域铺不上(实测重启即恢复)。守护幂等,已有实例不会重复。
+if [ -f "$SCRIPT_DIR/wallpaper_picker/suspend_daemon.py" ]; then
+    nohup python3 "$SCRIPT_DIR/wallpaper_picker/suspend_daemon.py" > /dev/null 2>&1 &
+fi
 
 # 轮询确认进程活着。只要熬过 STARTUP_GRACE 就算启动成功，
 # 期间进程死掉则立刻报错——比原来的固定 sleep 3 快得多。
