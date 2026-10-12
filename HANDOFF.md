@@ -295,6 +295,44 @@ CefInitialize 挂起点（gdb 异步 interrupt + 全线程 bt 是下一步手段
 **多屏时音量只有一份**（取主屏壁纸的），克隆模式同一壁纸两份渲染、声音
 叠加（渲染器每屏一个 mpv 实例，无逐屏静音参数）——均已记为已知限制。
 
+**锁屏解锁后壁纸再也不回来（三层修复，2026-10-13）**
+
+症状：锁屏（或待机）再解锁后动态壁纸消失，只剩静态壁纸；有时只有一块屏
+有画面、另一块永远是静态的。真机复现不需要锁屏：`gnome-extensions
+disable/enable` 百分百复现，且渲染器进程始终活着（CPU 还在跑，说明它没崩）。
+
+根因链条（三条缺一不可）：
+1. GNOME 45+ 锁屏会把会话切到 `unlock-dialog` 模式，扩展若没在
+   `metadata.json` 的 `session-modes` 里声明该模式会被**整个停用**；
+2. 渲染器窗口是刻意最小化的，而 GNOME 46 起
+   `global.get_window_actors()` **不返回最小化窗口的 actor**；
+3. 扩展唯一的兜底是内存里的 `_rendererActors` 缓存，而它随 `disable()` 被
+   清空了——重新启用后两个来源都是空的。诊断要点：此时 `_getSource` 在缓存
+   为空时直接 `return null`，**`_getSource FAIL` 日志根本不出现**；没有这条
+   日志就是「一个候选都没有」，而不是「有候选但没匹配上」（后者才打日志）。
+
+修复（三处，互为保险）：
+- 扩展 `metadata.json` 声明 `unlock-dialog`，锁屏不再被停用；
+- `_rendererActors` 不再随 disable 清空（改由 actor 自己的 destroy 回调清理），
+  并加 `Meta.Display.list_all_windows()`（含最小化窗口）作为查找兜底；
+- 守护进程订阅会话总线 `org.gnome.ScreenSaver.ActiveChanged`，解锁后 4 秒检查
+  画面状态、必要时重启渲染器；唤醒走 logind `PrepareForSleep`。扩展画面正常时
+  每 5 秒写 `lwpe-healthy` 心跳，守护据此跳过无谓重启；连续 5 秒找不到源则写
+  `lwpe-needs-restart` 请守护重启。重启走同一套启动器（`--apply-plan`），新窗口
+  重新 map → 被扩展纳管，实测两屏都恢复。
+
+**GNOME Shell 不会热加载扩展代码（排查时最重要的一条）**
+
+`gnome-extensions disable/enable` 只重跑 `enable()`，**不重新 import 模块**：
+GNOME 46 的 `extensionSystem.js` 里写着「Extensions can only be imported
+once」，`import(file://…)` 命中 GJS 的模块缓存；新装的扩展也一样（扩展目录
+只在 shell 启动时扫描一次）。后果：改完 `wallpaperManager.js` 无论怎么
+disable/enable，跑的都是**登录时刻那一份**代码，metadata 同理（读的是启动时
+缓存的副本）。判断「当前跑的是哪份代码」只能靠日志里新加的打印或明确的行为
+差异，**md5 对不上文件没有意义**。验证扩展侧改动必须注销重登（Wayland 下不能
+重启 shell）；守护进程是 Python，改完重启进程即可——本次把恢复主力放在守护
+侧，就是为了绕开这个约束。
+
 ### 构建
 
 **CEF 下载断流**
