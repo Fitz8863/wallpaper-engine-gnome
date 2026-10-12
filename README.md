@@ -230,10 +230,23 @@ python3 wallpaper_picker/paths.py screen      # 只打印主显示器
 **网页类壁纸打开慢？**
 网页壁纸由 CEF（Chromium）渲染，首次初始化需要十几秒，属正常现象。
 
+**Dock / 顶栏那一条看不到动态壁纸？**
+装了 Blur my Shell 且组件用「静态模糊」时，它会在 Dock/顶栏后面自己画一张
+**静态**壁纸的模糊快照，动态壁纸盖不到那一块（与壁纸渲染是否正常无关）。
+关掉该组件的静态模糊即可——改成动态模糊会实时模糊下方内容，动态壁纸就
+透出来了：
+```bash
+dconf write /org/gnome/shell/extensions/blur-my-shell/dash-to-dock/static-blur false
+dconf write /org/gnome/shell/extensions/blur-my-shell/panel/static-blur false  # 顶栏
+```
+（也可以在 Blur my Shell 的偏好设置里逐个组件切换。）代价是这几块区域每帧
+都要重新模糊，GPU 开销比静态模糊略高。
+
 ## 已知限制
 
 - 仅支持 Wayland 会话（X11 不适用）。
-- 当前面向单显示器输出（多屏用 `LWE_SCREEN` 指定）。
+- 多显示器已支持逐屏指定或整屏克隆（见「多显示器」）；逐屏的帧率/属性、
+  拔插显示屏的热响应仍在后续计划中。
 - **网页类壁纸在当前渲染器下不可用**：其 GNOME 分支的 CEF（浏览器引擎）
   初始化失败，进程挂着但永远没有画面（已定位为渲染器上游缺陷，与选择器
   无关）。选择器会正常列出这类壁纸，点击后会一直停在空白桌面。
