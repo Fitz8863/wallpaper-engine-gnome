@@ -3,7 +3,7 @@
     "description": "Use linux-wallpaperengine as your GNOME desktop background",
     "uuid": "linux-wallpaperengine@github.io",
     "shell-version": ["45", "46", "47", "48", "49", "50"],
-    "session-modes": ["user"],
+    "session-modes": ["user", "unlock-dialog"],
     "url": "https://github.com/Almamu/linux-wallpaperengine",
     "version": 1
 }

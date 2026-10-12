@@ -36,6 +36,87 @@ const BACKGROUND_FADE_ANIMATION_TIME = 1000;
 // actors from get_window_actors() on GNOME 50+.
 const _rendererActors = new Set();
 
+// 运行时状态目录与渲染器 pid 文件（与 picker/启动器约定一致，默认
+// ~/.cache/wallpaper-picker）。扩展通过一个标记文件请守护进程重启壁纸。
+const _STATE_DIR = GLib.build_filenamev(
+    [GLib.get_user_cache_dir(), 'wallpaper-picker']);
+const _PIDFILE = GLib.build_filenamev([_STATE_DIR, 'wallpaper.pid']);
+const _RESTART_FLAG = GLib.build_filenamev([_STATE_DIR, 'lwpe-needs-restart']);
+let _lastRestartRequest = 0;
+
+function rendererProcessAlive() {
+    try {
+        const [ok, contents] = GLib.file_get_contents(_PIDFILE);
+        if (!ok)
+            return false;
+        const pid = new TextDecoder().decode(contents).trim();
+        return pid.length > 0 &&
+            GLib.file_test(`/proc/${pid}`, GLib.FileTest.EXISTS);
+    } catch (e) {
+        return false;
+    }
+}
+
+// 桌面背景上没有任何可克隆的渲染器窗口时，只有重启渲染器进程才能恢复
+// （新窗口才会重新走 map → 被 WindowManager 纳管）。这里只写标记文件，
+// 实际重启由 suspend_daemon.py 执行；没在跑渲染器（用户主动停了）时不写。
+function requestRendererRestart(reason) {
+    const now = Date.now();
+    if (now - _lastRestartRequest < 10000)
+        return;
+    if (!rendererProcessAlive())
+        return;
+    _lastRestartRequest = now;
+    try {
+        // 注意：file_set_contents 的 contents 必须是字节数组，
+        // 传裸字符串会抛类型错误。
+        GLib.file_set_contents(
+            _RESTART_FLAG, new TextEncoder().encode(String(now)));
+        log(`lwpe: ${reason}, requested renderer restart`);
+    } catch (e) {
+        log(`lwpe: restart request failed: ${e.message}`);
+    }
+}
+
+// 画面正常的证据：所有 LiveWallpaper 都挂着克隆时定期刷新心跳文件。
+// suspend_daemon.py 用它判断解锁/唤醒后是否真需要重启渲染器——新版扩展
+// 锁屏时不会被停用，正常情况下无需重启；只有心跳过期（扩展找不到画面源）
+// 才重启。与 lwpe-needs-restart 的区别：那个是「现在坏了，请重启」，
+// 这个是「现在是好的，别动手」。
+const _HEALTH_FILE = GLib.build_filenamev([_STATE_DIR, 'lwpe-healthy']);
+const _starved = new Set();
+let _lastHeartbeat = 0;
+
+function reportWallpaperState(instance, hasSource) {
+    if (hasSource)
+        _starved.delete(instance);
+    else
+        _starved.add(instance);
+
+    const now = Date.now();
+    if (_starved.size > 0 || now - _lastHeartbeat < 5000)
+        return;
+    _lastHeartbeat = now;
+    try {
+        GLib.file_set_contents(
+            _HEALTH_FILE, new TextEncoder().encode(String(now)));
+    } catch (e) {
+        // 心跳写不出去只会让守护多做一次无谓重启，不影响画面
+    }
+}
+
+// Meta 的窗口列表包含最小化窗口，而 get_window_actors() 从 GNOME 46 起
+// 不含——渲染器窗口恰恰是被刻意最小化的。扩展被停用再启用（锁屏解锁走的
+// 就是这条路）时，这是找回画面源的最后一道兜底。
+function listRendererWindows() {
+    try {
+        return global.display.list_all_windows().filter(isRendererWindow);
+    } catch (e) {
+        log(`lwpe: list_all_windows failed: ${e.message}`);
+        return [];
+    }
+}
+
 function getWindowTitle(window) {
     try {
         return window?.get_title?.() || window?.title || '';
@@ -75,6 +156,7 @@ const LiveWallpaper = GObject.registerClass({
         this._sourceMappedId = 0;
         this._retryId = 0;
         this._destroying = false;
+        this._failTicks = 0;
 
         const monitor = Main.layoutManager.monitors[this._monitorIndex];
         this._monitorWidth = monitor?.width ?? backgroundActor.width;
@@ -96,15 +178,38 @@ const LiveWallpaper = GObject.registerClass({
         const operation = () => {
             if (this._destroying) return GLib.SOURCE_REMOVE;
 
-            if (!this._wallpaper) {
-                const source = this._getSource();
-                if (source) {
-                    this._attachClone(source);
-                } else if (_firstRun) {
-                    log(`lwpe: no renderer yet for monitor ${this._monitorIndex}, retrying...`);
+            const live = this._getSource();
+
+            if (this._wallpaper) {
+                // 克隆可能比它的源活得久（GC 期间 destroy 回调被抑制、
+                // 锁屏/唤醒把窗口 actor 拆掉等）：此时画面会永远冻结在
+                // 最后一帧且不会自愈。每个 tick 把记住的源与实时解析的
+                // 源比对，不一致就重建克隆。
+                if (this._cloneSource !== live) {
+                    this._clearClone();
                 }
             }
 
+            if (!this._wallpaper) {
+                if (live) {
+                    this._attachClone(live);
+                    this._failTicks = 0;
+                } else {
+                    if (_firstRun) {
+                        log(`lwpe: no renderer yet for monitor ${this._monitorIndex}, retrying...`);
+                    }
+                    this._failTicks += 1;
+                    if (this._failTicks >= 5) {
+                        // 持续 5 秒找不到任何可克隆窗口：渲染器多半还活着
+                        // 但它的窗口已经失效，只有重启渲染器能恢复。
+                        requestRendererRestart(
+                            `no live source for monitor ${this._monitorIndex}`);
+                        this._failTicks = 0;
+                    }
+                }
+            }
+
+            reportWallpaperState(this, Boolean(this._wallpaper));
             _firstRun = false;
             return GLib.SOURCE_CONTINUE;
         };
@@ -200,8 +305,8 @@ const LiveWallpaper = GObject.registerClass({
 
         let rendererActors = windowActors.filter(isRendererActor);
 
-        // Fall back to cached actors: on GNOME 50+ Mutter may remove
-        // minimized MetaWindowActors from get_window_actors().
+        // Fall back to cached actors: Mutter keeps minimized windows out of
+        // get_window_actors(), and the renderer window is minimized by design.
         if (rendererActors.length === 0) {
             rendererActors = [..._rendererActors].filter(actor => {
                 try {
@@ -210,9 +315,18 @@ const LiveWallpaper = GObject.registerClass({
                     return false;
                 }
             });
-            if (rendererActors.length === 0) {
-                return null;
-            }
+        }
+
+        // Last resort: ask Meta for the full window list (minimized windows
+        // included) and use each window's compositor actor.
+        if (rendererActors.length === 0) {
+            rendererActors = listRendererWindows()
+                .map(window => window.get_compositor_private?.())
+                .filter(actor => actor != null);
+        }
+
+        if (rendererActors.length === 0) {
+            return null;
         }
 
         // First try: match by monitor index
@@ -279,6 +393,7 @@ const LiveWallpaper = GObject.registerClass({
     // log spam on every wallpaper change came from exactly that.
     vfunc_destroy() {
         this._destroying = true;
+        _starved.delete(this);
         if (this._retryId) {
             GLib.source_remove(this._retryId);
             this._retryId = 0;
@@ -293,7 +408,6 @@ class ManagedWindow {
         this._window = window;
         this._signals = [];
         this._actor = null;
-        this._actorDestroyId = 0;
         this._surfaceContainer = null;
         this._surfacePositionId = 0;
         this._states = {
@@ -338,20 +452,21 @@ class ManagedWindow {
             this._pinSurfaceContainer();
         }
 
-        // Cache MetaWindowActor before minimizing — on GNOME 50+ Mutter
-        // may remove minimized actors from get_window_actors().
+        // Cache MetaWindowActor before minimizing — Mutter keeps minimized
+        // windows out of get_window_actors(), so this cache is the main way
+        // LiveWallpaper._getSource() finds the source.  It must survive the
+        // extension's own disable/enable cycle (what a lock screen does to
+        // us): clearing it left _getSource with every source empty and the
+        // wallpaper gone for good.  Cleanup is owned by the actor itself so
+        // it also runs while the extension is disabled.
         const actor = this._window.get_compositor_private?.();
         if (actor) {
             this._actor = actor;
-            // LiveWallpaper's _getSource fallback visits every cached
-            // actor each poll tick; a disposed one would log a GJS
-            // warning on every visit, so drop it the moment it dies.
-            this._actorDestroyId = actor.connect('destroy', () => {
-                _rendererActors.delete(actor);
-                this._actor = null;
-                this._actorDestroyId = 0;
-            });
             _rendererActors.add(actor);
+            if (!actor._lwpeDestroyTracked) {
+                actor._lwpeDestroyTracked = true;
+                actor.connect('destroy', () => _rendererActors.delete(actor));
+            }
         }
 
         this._parseTitle();
@@ -430,21 +545,11 @@ class ManagedWindow {
             }
         }
 
-        // Drop the cached actor.  If the actor died first its destroy
-        // callback already cleared both fields — don't touch it again,
-        // disconnecting on a disposed actor would itself log a warning.
-        if (this._actor) {
-            _rendererActors.delete(this._actor);
-            if (this._actorDestroyId) {
-                try {
-                    this._actor.disconnect(this._actorDestroyId);
-                } catch (e) {
-                    // actor already disposed
-                }
-            }
-            this._actor = null;
-            this._actorDestroyId = 0;
-        }
+        // Forget the actor but leave it in _rendererActors: that cache is
+        // what lets a re-enabled extension find the (minimized) renderer
+        // window again.  Stale entries age out through the actor's own
+        // destroy handler.
+        this._actor = null;
 
         this._signals.forEach(signal => {
             try {
@@ -482,6 +587,9 @@ class WindowManager {
         }
 
         windowActors.filter(isRendererActor).forEach(actor => this.addWindow(actor));
+        // get_window_actors() 不含最小化窗口：被刻意最小化的渲染器窗口只能
+        // 从 Meta 的完整列表里找回来（扩展停用再启用后正是这种状态）。
+        listRendererWindows().forEach(window => this.addWindow(window));
     }
 
     disable() {
@@ -717,24 +825,20 @@ export class WallpaperManager {
 
         global.lwpeWallpaperManager = this;
 
-        // Session unlock / resume: the shield dialog tears background
-        // actors down and window actors get remapped by Mutter, so clones
-        // may hold stale sources.  Force a rebuild through the same path
-        // as startup (destroy the LiveWallpaper actors; the overridden
-        // _createBackgroundActor recreates them with fresh sources).
+        // Session unlock / wake: log it (the per-tick source check in
+        // LiveWallpaper heals stale clones, and requestRendererRestart asks
+        // the daemon to restart the renderer if no live source can be found
+        // at all).  NOTE: on GNOME 45+ the lock screen switches the session
+        // to the 'unlock-dialog' mode, so the extension must declare that
+        // mode in metadata.json's session-modes to stay active across
+        // lock/unlock at all.
         try {
-            this._lockSignalId = Main.screenShield.connect('lock-screen-shield-changed', () => {
-                const shieldDown = !Main.screenShield.locked;
-                if (shieldDown) {
-                    log('lwpe: unlock detected, rebuilding wallpaper actors');
-                    this._reloadBackgrounds();
-                }
+            this._lockSignalId = Main.screenShield.connect('wake-up-screen', () => {
+                log('lwpe: wake-up-screen received');
             });
         } catch (e) {
-            // Signal name unavailable on this GNOME version; the
-            // notify::mapped watcher and retry tick still cover it.
             this._lockSignalId = 0;
-            log(`lwpe: lock-screen signal unavailable: ${e.message}`);
+            log(`lwpe: wake-up-screen signal unavailable: ${e.message}`);
         }
 
         try {
