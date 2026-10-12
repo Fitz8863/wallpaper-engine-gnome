@@ -48,6 +48,7 @@ log_file = open(os.path.join(STATE_DIR, "suspend-daemon.log"), "a", buffering=1)
 _last_restart = 0.0
 _restart_times = []
 _restart_lock = threading.Lock()
+_restarting = False
 
 
 def log(msg):
@@ -72,8 +73,11 @@ def extension_healthy(max_age=20):
 
 
 def restart_wallpaper(reason, min_interval=60, cap=True):
-    global _last_restart
+    global _last_restart, _restarting
     with _restart_lock:
+        if _restarting:
+            log(f"{reason}:上一次重启还没结束,跳过")
+            return
         now = time.monotonic()
         if now - _last_restart < min_interval:
             log(f"{reason}:{min_interval} 秒内刚重启过,跳过")
@@ -85,6 +89,7 @@ def restart_wallpaper(reason, min_interval=60, cap=True):
                 return
         _last_restart = now
         _restart_times.append(now)
+        _restarting = True
     log(f"{reason}:重启壁纸")
     try:
         subprocess.run(["bash", WAKER, "--apply-plan"],
@@ -92,6 +97,9 @@ def restart_wallpaper(reason, min_interval=60, cap=True):
         log("重启完成")
     except Exception as exc:
         log(f"重启失败: {exc}")
+    finally:
+        with _restart_lock:
+            _restarting = False
 
 
 def recover(reason, delay):
@@ -103,7 +111,8 @@ def recover(reason, delay):
     if extension_healthy():
         log(f"{reason}:扩展仍持有画面源,无需重启")
         return
-    restart_wallpaper(reason, min_interval=20, cap=False)
+    # 解锁是人为事件,间隔取小一点:连续锁屏/解锁测试时每次都要能自愈
+    restart_wallpaper(reason, min_interval=5, cap=False)
 
 
 def check_restart_flag():
