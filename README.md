@@ -230,6 +230,26 @@ python3 wallpaper_picker/paths.py screen      # 只打印主显示器
 **网页类壁纸打开慢？**
 网页壁纸由 CEF（Chromium）渲染，首次初始化需要十几秒，属正常现象。
 
+**界面正常，但桌面一直是静态壁纸？**
+先跑这一条：
+
+```bash
+ldd ~/linux-wallpaperengine/build/output/linux-wallpaperengine | grep "not found"
+```
+
+有输出说明渲染器的动态链接断了——最常见的原因是**发行版大版本升级**
+（如 Ubuntu 24.04 → 26.04 把 FFmpeg 从 6 升到 8，soname 从 `libavcodec.so.60`
+变成 `.62`）。此时界面、扩展、托盘全都正常，只有渲染器进程启动即死，所以
+表现为「软件好像没用」。修复只能重编渲染器：
+
+```bash
+sudo apt install libmpv-dev libsdl2-dev     # 升级时可能被卸掉
+cd ~/linux-wallpaperengine/build
+cmake -DCMAKE_BUILD_TYPE=Release .. && make -j$(nproc)
+```
+
+没有输出则不是这个问题，去 `~/.cache/wallpaper-picker/wallpaper.log` 找报错。
+
 **Dock / 顶栏那一条看不到动态壁纸？**
 装了 Blur my Shell 且组件用「静态模糊」时，它会在 Dock/顶栏后面自己画一张
 **静态**壁纸的模糊快照，动态壁纸盖不到那一块（与壁纸渲染是否正常无关）。

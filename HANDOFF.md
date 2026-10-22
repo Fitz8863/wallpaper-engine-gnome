@@ -342,6 +342,45 @@ disable/enable，跑的都是**登录时刻那一份**代码，metadata 同理�
 **`libmpv-dev` 是硬依赖**
 `find_package(MPV REQUIRED)`，没有开关可绕。装它必须用 sudo。
 
+**发行版大版本升级会静默弄坏渲染器（26.04 实测）**
+
+症状极具迷惑性：**界面完全正常、扩展 ACTIVE、守护进程日志还在勤快地打印
+「重启完成」，但桌面就是静态的**。真实原因是渲染器进程启动即死。
+
+机理：渲染器是外部依赖、deb 里不含它，所以 `apt dist-upgrade` 不会有任何提示。
+Ubuntu 24.04 → 26.04 把 FFmpeg 从 6.1 升到 8.0，soname 整体换代：
+
+| 库 | FFmpeg 6 | FFmpeg 8 |
+|---|---|---|
+| libavcodec | .so.60 | .so.62 |
+| libavformat | .so.60 | .so.62 |
+| libavutil | .so.58 | .so.60 |
+| libswresample | .so.4 | .so.6 |
+
+旧二进制报 `error while loading shared libraries: libavcodec.so.60`。
+老 soname 的包在新发行版里**已彻底没有**（`apt-cache policy libavcodec60`
+候选为空），降级走不通，只能重编。
+
+**排查入口固定为这一条**：`ldd <渲染器二进制> | grep "not found"`。
+别从界面/扩展/日志入手——这次三者全部显示正常，会浪费很多时间。
+
+重编注意两点：
+1. **dev 包会跟着一起被卸**。本次 `libmpv-dev`、`libsdl2-dev` 都被
+   升级移除了，CMake 分别报 `find_package(MPV REQUIRED)` 和
+   `FindSDL2.cmake` 找不到。直接按 `install.sh` 的 `APT_PACKAGES` 整份
+   重装最省事，不要一个个试；
+2. **CMake 缓存必须重跑**。`cmake -DCMAKE_BUILD_TYPE=Release ..` 会重新
+   探测 FFmpeg 的 soname，只 `make` 的话还链着旧库。
+
+源码无需改动：`AudioStream.cpp` 已有 `FF_API_OLD_CHANNEL_LAYOUT` 分支自动
+走 `swr_alloc_set_opts2`（FFmpeg 7+ 的新 channel layout API），
+`av_init_packet` 在 8.0 里虽标 deprecated 但符号仍在。实测 8.0 下零编译
+错误。CEF 那 370MB 在 `build/cef/` 里不会重新下载。
+
+验证顺序（缺一不可，前两步过了不代表壁纸能用）：
+`ldd` 无缺失 → `--screenshot` 出图 → 实机 `start-wallpaper.sh <ID>` →
+`journalctl --user | grep "wallpaper applied on monitor"` 每块屏各一条。
+
 **子模块首次克隆可能不完整**
 `git clone --recurse-submodules` 后要确认 `src/External/` 下的目录非空，
 必要时 `git submodule update --init --recursive --force` 补一次。
