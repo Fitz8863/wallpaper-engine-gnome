@@ -69,3 +69,58 @@ def test_set_autostart_toggle_writes_and_removes(picker_mod):
     assert read_autostart(picker_mod) is None
     win.set_autostart(True)
     assert read_autostart(picker_mod) is not None
+
+
+def test_manual_restore_setting_requests_restore_on_first_activation(picker_mod):
+    assert picker_mod.should_restore_on_activate(
+        first=True,
+        snapshot_path=None,
+        restore_mode=False,
+        settings={"restore_on_start": True},
+    ) is True
+
+
+def test_restore_is_not_requested_for_normal_start_when_disabled(picker_mod):
+    assert picker_mod.should_restore_on_activate(
+        first=True,
+        snapshot_path=None,
+        restore_mode=False,
+        settings={"restore_on_start": False},
+    ) is False
+
+
+def test_extension_loaded_requires_enabled_active(picker_mod, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = "Enabled: No\nState: ACTIVE\n"
+
+    monkeypatch.setattr(picker_mod.subprocess, "run", lambda *args, **kwargs: Result())
+    assert picker_mod.extension_loaded() is False
+
+
+def test_extension_loaded_accepts_only_enabled_active(picker_mod, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = "Enabled: Yes\nState: ACTIVE\n"
+
+    monkeypatch.setattr(picker_mod.subprocess, "run", lambda *args, **kwargs: Result())
+    assert picker_mod.extension_loaded() is True
+
+
+def test_stop_clears_all_running_screen_state(picker_mod, monkeypatch):
+    win = picker_mod.WallpaperPicker.__new__(picker_mod.WallpaperPicker)
+    win.current_id = "123"
+    win.current_screens = {"eDP-1": "123", "HDMI-1": "456"}
+    win.set_busy = lambda *_args: None
+    win.remove_autostart = lambda: None
+    win.update_highlight = lambda: None
+    win.update_status = lambda: None
+    win.apply_btn = type("Button", (), {"set_sensitive": lambda *_: None,
+                                        "set_label": lambda *_: None})()
+    win.toast_overlay = type("Overlay", (), {"add_toast": lambda *_: None})()
+    monkeypatch.setattr(picker_mod.Adw, "Toast", lambda **kwargs: kwargs)
+
+    result = type("Result", (), {"returncode": 0, "stderr": ""})()
+    assert win._after_stop(result) is False
+    assert win.current_id is None
+    assert win.current_screens == {}

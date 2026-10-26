@@ -494,11 +494,23 @@ def running_wallpaper_id():
 
 def extension_loaded():
     try:
-        return subprocess.run(["gnome-extensions", "info", EXT_UUID],
-                              capture_output=True, text=True,
-                              timeout=3).returncode == 0
+        env = os.environ.copy()
+        env["LC_ALL"] = "C"
+        result = subprocess.run(["gnome-extensions", "info", EXT_UUID],
+                                capture_output=True, text=True,
+                                timeout=3, env=env)
+        if result.returncode != 0:
+            return False
+        output = result.stdout or ""
+        return "Enabled: Yes" in output and "State: ACTIVE" in output
     except Exception:
         return False
+
+
+def should_restore_on_activate(first, snapshot_path, restore_mode, settings):
+    """Return whether first activation should restore the saved wallpaper."""
+    return bool(first and not snapshot_path and (
+        restore_mode or settings.get("restore_on_start", False)))
 
 
 # --------------------------------------------------- 渲染器属性列表解析
@@ -1581,6 +1593,7 @@ class WallpaperPicker(Adw.ApplicationWindow):
             self.update_status()
             return False
         self.current_id = None
+        self.current_screens = {}
         self.remove_autostart()
         self.update_highlight()
         self.update_status()
@@ -1766,12 +1779,12 @@ class PickerApp(Adw.Application):
         window.ensure_autostart()
         # 预选交给 reload() 消化：此时壁纸清单还没扫描，立刻 select 找不到对象
         window.preselect = self.preselect
-        if self.restore_mode and first and not self.snapshot_path:
-            # 开机自启：不弹窗口，等会话就绪后恢复上次的壁纸；
-            # 之后用户再启动本应用走的是上面的 present 分支
-            # （snapshot 是开发调试模式，必须 present 才能出图）
+        if should_restore_on_activate(
+                first, self.snapshot_path, self.restore_mode, window.settings):
+            # 开机自启或用户打开了「启动时恢复壁纸」时，等会话就绪后恢复。
             GLib.timeout_add_seconds(5, window.restore_last)
-        else:
+        # 开机自启首次启动只进托盘；手动启动、后续唤起和 snapshot 都要显示窗口。
+        if not (self.restore_mode and first and not self.snapshot_path):
             window.present()
         if self.snapshot_path:
             GLib.timeout_add(2500, self._snapshot, window)

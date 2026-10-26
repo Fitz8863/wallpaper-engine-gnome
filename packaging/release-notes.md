@@ -1,10 +1,10 @@
 ## 安装
 
-下载下方的 `wallpaper-engine-gnome_1.3.0_amd64_linux.deb` 附件（dpkg 不挑
+下载下方的 `wallpaper-engine-gnome_1.4.0_amd64_linux.deb` 附件（dpkg 不挑
 文件名，以 `_amd64_linux` 结尾的纯 Python 包用 dpkg -i 安装没有问题），然后：
 
 ```bash
-sudo dpkg -i ./wallpaper-engine-gnome_1.3.0_amd64_linux.deb
+sudo dpkg -i ./wallpaper-engine-gnome_1.4.0_amd64_linux.deb
 ```
 
 **首次安装后需要注销并重新登录一次**——Wayland 下 GNOME Shell 无法热加载新扩展。
@@ -17,6 +17,11 @@ sudo dpkg -i ./wallpaper-engine-gnome_1.3.0_amd64_linux.deb
 详见仓库 README 的安装章节。
 
 ## 本版本内容
+
+- **修复桌面覆盖问题**：启动前确认 GNOME 扩展处于 ACTIVE；核心背景注入失败时拒绝启用，避免全屏渲染窗口盖住顶栏和 Dock
+- **强化启动与恢复**：精确识别渲染器进程，启动失败清理 PID/守护进程；用户停止后不会被锁屏恢复或守护进程重新拉起
+- **修复恢复状态**：手动启动恢复开关、停止后的多屏状态、空恢复配置和自定义状态目录均按实际状态处理
+- **补充回归测试**：覆盖启动器、恢复守护、GNOME 扩展状态和多屏恢复错误路径
 
 - **多显示器支持**：每块屏各自的壁纸，或全部屏克隆同一张（对应官方
   Wallpaper Engine 的 Clone 模式，接新屏默认克隆）；主窗口选中壁纸后从

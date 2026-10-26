@@ -119,6 +119,9 @@ curl -L -C - --retry 10 "$URL" -o "$RENDERER_DIR/build/cef/$(basename "$URL")"
 ./start-wallpaper.sh 3050160027 -f 30 --disable-particles   # 透传渲染器参数
 ```
 
+启动器在创建 `--gnome` 渲染窗口前会自动启用并确认 GNOME 扩展处于 `ACTIVE` 状态；
+如果扩展未加载，会中止启动，避免普通窗口覆盖顶栏和 Dock。
+
 ### 帧率上限怎么调
 
 不同类型壁纸对帧率上限的响应完全不同（参见官方文档

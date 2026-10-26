@@ -78,3 +78,17 @@ def test_single_screen_degenerates_cleanly(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "find_screens", lambda: [("eDP-1", True)])
     plan = paths.plan_launch("3018048025", write_back=False)
     assert plan == [("eDP-1", "3018048025")]
+
+
+def test_empty_restore_plan_fails_with_actionable_error(monkeypatch, tmp_path):
+    """恢复时没有 last 壁纸不能把 None 传进路径拼接。"""
+    state = tmp_path / "state"
+    state.mkdir()
+    monkeypatch.setenv("LWE_STATE_DIR", str(state))
+    monkeypatch.setattr(paths, "find_screens", lambda: [("eDP-1", True)])
+    monkeypatch.setattr(paths, "find_steam_workshop", lambda: str(tmp_path))
+    monkeypatch.setattr(paths, "find_workshop", lambda: None)
+
+    import pytest
+    with pytest.raises(ValueError, match="没有可恢复的壁纸"):
+        paths.plan_launch(None, write_back=False)

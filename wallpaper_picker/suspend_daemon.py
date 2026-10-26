@@ -35,11 +35,14 @@ PIDFILE = os.path.join(STATE_DIR, "suspend-daemon.pid")
 WALLPAPER_PIDFILE = os.path.join(STATE_DIR, "wallpaper.pid")
 RESTART_FLAG = os.path.join(STATE_DIR, "lwpe-needs-restart")
 HEALTH_FILE = os.path.join(STATE_DIR, "lwpe-healthy")
+STOP_MARKER = os.path.join(STATE_DIR, "wallpaper-stop")
+RECOVERY_ENV = "LWE_RECOVERY"
 # 本文件在包内(wallpaper_picker/),启动器在上一级(仓库根/deb 安装根)
 WAKER = os.path.join(
     os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
     "start-wallpaper.sh")
 
+os.makedirs(STATE_DIR, exist_ok=True)
 log_file = open(os.path.join(STATE_DIR, "suspend-daemon.log"), "a", buffering=1)
 
 # 重启节流:同一分钟内不重复重启;扩展反复报错时 10 分钟窗口内最多 3 次,
@@ -56,12 +59,13 @@ def log(msg):
 
 
 def wallpaper_stopped():
-    """pidfile 不存在 = 用户明确停掉了壁纸(启动器 --stop 会删掉它)。
+    """pidfile 不存在或停止标记存在 = 用户明确停掉了壁纸。
 
     渲染器进程消失但 pidfile 还在,说明它是崩溃/窗口被拆,仍然需要重启,
-    所以这里只认 pidfile,不认进程是否还活着。
+    所以这里只认 pidfile 与显式停止标记,不认进程是否还活着。
     """
-    return not os.path.exists(WALLPAPER_PIDFILE)
+    return (not os.path.exists(WALLPAPER_PIDFILE)
+            or os.path.exists(STOP_MARKER))
 
 
 def extension_healthy(max_age=20):
@@ -77,26 +81,40 @@ def restart_wallpaper(reason, min_interval=60, cap=True):
     with _restart_lock:
         if _restarting:
             log(f"{reason}:上一次重启还没结束,跳过")
-            return
+            return False
+        if wallpaper_stopped():
+            log(f"{reason}:用户已停止壁纸,跳过")
+            return False
         now = time.monotonic()
         if now - _last_restart < min_interval:
             log(f"{reason}:{min_interval} 秒内刚重启过,跳过")
-            return
+            return False
         if cap:
             _restart_times[:] = [t for t in _restart_times if now - t < 600]
             if len(_restart_times) >= 3:
                 log(f"{reason}:10 分钟内已重启 3 次,暂时退避")
-                return
+                return False
         _last_restart = now
         _restart_times.append(now)
         _restarting = True
     log(f"{reason}:重启壁纸")
     try:
-        subprocess.run(["bash", WAKER, "--apply-plan"],
-                       capture_output=True, text=True, timeout=60)
+        env = os.environ.copy()
+        # 让启动器知道这是守护恢复，不能清掉用户刚写下的停止标记。
+        env[RECOVERY_ENV] = "1"
+        result = subprocess.run(
+            ["bash", WAKER, "--apply-plan"],
+            capture_output=True, text=True, timeout=60, env=env)
+        if result.returncode != 0:
+            detail = (result.stderr or "").strip().splitlines()
+            suffix = f":{detail[-1][:160]}" if detail else ""
+            log(f"重启失败(退出码 {result.returncode}){suffix}")
+            return False
         log("重启完成")
+        return True
     except Exception as exc:
         log(f"重启失败: {exc}")
+        return False
     finally:
         with _restart_lock:
             _restarting = False
@@ -117,6 +135,9 @@ def recover(reason, delay):
 
 def check_restart_flag():
     """轮询扩展写下的重启标记(每 3 秒)。"""
+    token = _restart_flag_token()
+    if token is None:
+        return True
     try:
         age = time.time() - os.path.getmtime(RESTART_FLAG)
     except OSError:
@@ -128,12 +149,27 @@ def check_restart_flag():
         except OSError:
             pass
         return True
-    restart_wallpaper("扩展报告无可克隆的画面源")
-    try:
-        os.remove(RESTART_FLAG)
-    except OSError:
-        pass
+    if not restart_wallpaper("扩展报告无可克隆的画面源"):
+        return True
+    # 重启期间扩展可能又发现了坏源并写入新标记。只删除本轮消费的
+    # 那一个版本，不能覆盖新的恢复请求。
+    if _restart_flag_token() == token:
+        try:
+            os.remove(RESTART_FLAG)
+        except OSError:
+            pass
     return True
+
+
+def _restart_flag_token():
+    """返回重启标记当前版本，用于避免删除重启期间的新标记。"""
+    try:
+        stat = os.stat(RESTART_FLAG)
+        with open(RESTART_FLAG, "rb") as fh:
+            content = fh.read()
+        return stat.st_ino, stat.st_mtime_ns, stat.st_size, content
+    except OSError:
+        return None
 
 
 def main():

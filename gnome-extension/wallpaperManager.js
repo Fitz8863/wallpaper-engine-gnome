@@ -15,6 +15,7 @@
 
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 import GObject from 'gi://GObject';
 import Graphene from 'gi://Graphene';
 import Meta from 'gi://Meta';
@@ -37,24 +38,105 @@ const BACKGROUND_FADE_ANIMATION_TIME = 1000;
 const _rendererActors = new Set();
 
 // 运行时状态目录与渲染器 pid 文件（与 picker/启动器约定一致，默认
-// ~/.cache/wallpaper-picker）。扩展通过一个标记文件请守护进程重启壁纸。
-const _STATE_DIR = GLib.build_filenamev(
+// ~/.cache/wallpaper-picker）。扩展进程通常继承 LWE_STATE_DIR；如果用户
+// 只给启动器设置了该变量，则从正在运行的渲染器/守护进程环境中解析它。
+const _DEFAULT_STATE_DIR = GLib.build_filenamev(
     [GLib.get_user_cache_dir(), 'wallpaper-picker']);
-const _PIDFILE = GLib.build_filenamev([_STATE_DIR, 'wallpaper.pid']);
-const _RESTART_FLAG = GLib.build_filenamev([_STATE_DIR, 'lwpe-needs-restart']);
+let _runtimeStateDir = null;
 let _lastRestartRequest = 0;
 
-function rendererProcessAlive() {
+function addStateDir(dirs, path) {
+    if (!path || !path.trim())
+        return;
+    const normalized = path.replace(/\/+$/, '');
+    if (normalized && !dirs.includes(normalized))
+        dirs.push(normalized);
+}
+
+function processStateDirs() {
+    const dirs = [];
+    let enumerator = null;
     try {
-        const [ok, contents] = GLib.file_get_contents(_PIDFILE);
+        const proc = Gio.File.new_for_path('/proc');
+        enumerator = proc.enumerate_children(
+            'standard::name', Gio.FileQueryInfoFlags.NONE, null);
+        let info;
+        while ((info = enumerator.next_file(null)) !== null) {
+            const name = info.get_name();
+            if (!/^\d+$/.test(name))
+                continue;
+            const [cmdOk, cmdBytes] = GLib.file_get_contents(
+                `/proc/${name}/cmdline`);
+            if (!cmdOk)
+                continue;
+            const cmdline = new TextDecoder().decode(cmdBytes);
+            const renderer = cmdline.includes('--gnome');
+            const daemon = cmdline.includes('suspend_daemon.py');
+            if (!renderer && !daemon)
+                continue;
+            const [envOk, envBytes] = GLib.file_get_contents(
+                `/proc/${name}/environ`);
+            if (!envOk)
+                continue;
+            for (const item of new TextDecoder().decode(envBytes).split('\0')) {
+                if (item.startsWith('LWE_STATE_DIR='))
+                    addStateDir(dirs, item.substring('LWE_STATE_DIR='.length));
+                else if (item.startsWith('XDG_CACHE_HOME='))
+                    addStateDir(dirs, GLib.build_filenamev([
+                        item.substring('XDG_CACHE_HOME='.length),
+                        'wallpaper-picker']));
+            }
+        }
+    } catch (e) {
+        // /proc may be unavailable or restricted; the default/env paths remain.
+    } finally {
+        try { enumerator?.close(null); } catch (e) {}
+    }
+    return dirs;
+}
+
+function stateDirCandidates() {
+    const dirs = [];
+    addStateDir(dirs, GLib.getenv('LWE_STATE_DIR'));
+    const xdgCache = GLib.getenv('XDG_CACHE_HOME');
+    if (xdgCache) {
+        addStateDir(dirs, GLib.build_filenamev([xdgCache, 'wallpaper-picker']));
+    }
+    addStateDir(dirs, _DEFAULT_STATE_DIR);
+    processStateDirs().forEach(path => addStateDir(dirs, path));
+    return dirs;
+}
+
+function rendererProcessAlive(stateDir) {
+    try {
+        const pidfile = GLib.build_filenamev([stateDir, 'wallpaper.pid']);
+        const [ok, contents] = GLib.file_get_contents(pidfile);
         if (!ok)
             return false;
         const pid = new TextDecoder().decode(contents).trim();
-        return pid.length > 0 &&
-            GLib.file_test(`/proc/${pid}`, GLib.FileTest.EXISTS);
+        if (!pid || !GLib.file_test(`/proc/${pid}`, GLib.FileTest.EXISTS))
+            return false;
+        const [cmdOk, cmdBytes] = GLib.file_get_contents(
+            `/proc/${pid}/cmdline`);
+        return cmdOk && new TextDecoder().decode(cmdBytes).includes('--gnome');
     } catch (e) {
         return false;
     }
+}
+
+function resolveStateDir(force = false) {
+    if (!force && _runtimeStateDir && rendererProcessAlive(_runtimeStateDir))
+        return _runtimeStateDir;
+
+    const candidates = stateDirCandidates();
+    for (const candidate of candidates) {
+        if (rendererProcessAlive(candidate)) {
+            _runtimeStateDir = candidate;
+            return candidate;
+        }
+    }
+    _runtimeStateDir = candidates[0] || _DEFAULT_STATE_DIR;
+    return _runtimeStateDir;
 }
 
 // 桌面背景上没有任何可克隆的渲染器窗口时，只有重启渲染器进程才能恢复
@@ -64,14 +146,16 @@ function requestRendererRestart(reason) {
     const now = Date.now();
     if (now - _lastRestartRequest < 10000)
         return;
-    if (!rendererProcessAlive())
+    const stateDir = resolveStateDir(true);
+    if (!rendererProcessAlive(stateDir))
         return;
     _lastRestartRequest = now;
     try {
         // 注意：file_set_contents 的 contents 必须是字节数组，
         // 传裸字符串会抛类型错误。
         GLib.file_set_contents(
-            _RESTART_FLAG, new TextEncoder().encode(String(now)));
+            GLib.build_filenamev([stateDir, 'lwpe-needs-restart']),
+            new TextEncoder().encode(String(now)));
         log(`lwpe: ${reason}, requested renderer restart`);
     } catch (e) {
         log(`lwpe: restart request failed: ${e.message}`);
@@ -83,7 +167,6 @@ function requestRendererRestart(reason) {
 // 锁屏时不会被停用，正常情况下无需重启；只有心跳过期（扩展找不到画面源）
 // 才重启。与 lwpe-needs-restart 的区别：那个是「现在坏了，请重启」，
 // 这个是「现在是好的，别动手」。
-const _HEALTH_FILE = GLib.build_filenamev([_STATE_DIR, 'lwpe-healthy']);
 const _starved = new Set();
 let _lastHeartbeat = 0;
 
@@ -99,7 +182,8 @@ function reportWallpaperState(instance, hasSource) {
     _lastHeartbeat = now;
     try {
         GLib.file_set_contents(
-            _HEALTH_FILE, new TextEncoder().encode(String(now)));
+            GLib.build_filenamev([resolveStateDir(), 'lwpe-healthy']),
+            new TextEncoder().encode(String(now)));
     } catch (e) {
         // 心跳写不出去只会让守护多做一次无谓重启，不影响画面
     }
@@ -636,7 +720,13 @@ export class WallpaperManager {
         this._wallpaperActors = new Set();
         this._windowManager = new WindowManager();
 
-        this._enable();
+        try {
+            this._enable();
+        } catch (e) {
+            // Keep a failed enable from leaving a partially injected Shell.
+            this._injectionManager.clear();
+            throw e;
+        }
         log('lwpe: enabled');
     }
 
@@ -660,11 +750,17 @@ export class WallpaperManager {
     }
 
     _enable() {
-        // Each override wrapped individually so a single incompatible
-        // API won't disable the entire extension on startup (issue #4).
+        // The background hook is the safety boundary: without it the renderer
+        // remains a normal fullscreen window and can cover the top bar/Dock.
+        // A failure must abort enable instead of leaving the extension ACTIVE.
         try {
+            const backgroundPrototype = Background.BackgroundManager.prototype;
+            const originalBackgroundHook = backgroundPrototype._createBackgroundActor;
+            if (typeof originalBackgroundHook !== 'function') {
+                throw new Error('_createBackgroundActor is unavailable');
+            }
             this._injectionManager.overrideMethod(
-                Background.BackgroundManager.prototype,
+                backgroundPrototype,
                 '_createBackgroundActor',
                 originalMethod => {
                     return function () {
@@ -679,10 +775,16 @@ export class WallpaperManager {
                     };
                 }
             );
+            if (backgroundPrototype._createBackgroundActor === originalBackgroundHook) {
+                throw new Error('InjectionManager did not replace _createBackgroundActor');
+            }
         } catch (e) {
             log(`lwpe: _createBackgroundActor override FAILED: ${e.message}`);
+            throw new Error(`core background hook unavailable: ${e.message}`);
         }
 
+        // Each non-core override is best-effort because GNOME Shell changes
+        // these private APIs between releases.
         try {
             this._injectionManager.overrideMethod(
                 Shell.Global.prototype,

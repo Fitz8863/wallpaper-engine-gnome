@@ -16,7 +16,7 @@
 #   ./start-wallpaper.sh 3050160027 -f 30
 #   ./start-wallpaper.sh 3050160027 --disable-particles
 #
-# 前提: GNOME 扩展 linux-wallpaperengine@github.io 已启用（装完需注销重登一次）
+# 启动前会自动启用并确认 GNOME 扩展 linux-wallpaperengine@github.io 已 ACTIVE
 #
 # 可用环境变量覆盖（详见 README「目录与自动探测」）：
 #   LWE_BIN        渲染器二进制路径
@@ -37,12 +37,88 @@ BIN="${BIN:-${LWE_BIN:-$HOME/linux-wallpaperengine/build/output/linux-wallpapere
 # LWE_SCREEN 只在多屏计划失效回落单屏时作为主屏名使用（launch 通常覆盖它）
 SCREEN="${LWE_SCREEN:-$(python3 "$SCRIPT_DIR/wallpaper_picker/paths.py" screen 2>/dev/null || echo eDP-1)}"
 STATE_DIR="${LWE_STATE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/wallpaper-picker}"
+EXT_UUID="linux-wallpaperengine@github.io"
 LIST="$STATE_DIR/wallpapers.txt"
 LOG="$STATE_DIR/wallpaper.log"
 PIDFILE="$STATE_DIR/wallpaper.pid"
 SETTINGS="$STATE_DIR/settings.json"
+DAEMON_PIDFILE="$STATE_DIR/suspend-daemon.pid"
+STOP_MARKER="$STATE_DIR/wallpaper-stop"
 
 mkdir -p "$STATE_DIR"
+
+# 只识别当前启动器记录的渲染器。不能用全局 pkill：LWE_BIN 可以是任意
+# 可执行文件名，而且同一台机器上可能还有别的 Wallpaper Engine 实例。
+renderer_pid_matches() {
+    local pid="$1" arg has_gnome=0 has_bin=0 expected exe
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    while IFS= read -r -d '' arg; do
+        [ "$arg" = "--gnome" ] && has_gnome=1
+        [ "$arg" = "$BIN" ] && has_bin=1
+    done < "/proc/$pid/cmdline"
+    [ "$has_gnome" = 1 ] || return 1
+    if [ "$has_bin" = 1 ]; then
+        return 0
+    fi
+    exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+    expected="$(readlink -f "$BIN" 2>/dev/null || printf '%s' "$BIN")"
+    [ -n "$exe" ] && [ "$exe" = "$expected" ]
+}
+
+renderer_pids() {
+    local proc pid
+    for proc in /proc/[0-9]*; do
+        pid="${proc##*/}"
+        if renderer_pid_matches "$pid"; then
+            printf '%s\n' "$pid"
+        fi
+    done
+}
+
+stop_renderers() {
+    local stopped=0 pid
+    while read -r pid; do
+        [ -n "$pid" ] || continue
+        kill "$pid" 2>/dev/null && stopped=1 || true
+    done < <(renderer_pids)
+    sleep 0.2
+    while read -r pid; do
+        [ -n "$pid" ] || continue
+        kill -9 "$pid" 2>/dev/null && stopped=1 || true
+    done < <(renderer_pids)
+    [ "$stopped" = 1 ]
+}
+
+daemon_pid_matches() {
+    local pid="$1" arg
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    while IFS= read -r -d '' arg; do
+        [ "$arg" = "$SCRIPT_DIR/wallpaper_picker/suspend_daemon.py" ] && return 0
+        case "$arg" in
+            */suspend_daemon.py) return 0;;
+        esac
+    done < "/proc/$pid/cmdline"
+    return 1
+}
+
+stop_daemon() {
+    local pid stopped=0
+    if [ -f "$DAEMON_PIDFILE" ]; then
+        pid="$(cat "$DAEMON_PIDFILE" 2>/dev/null || true)"
+        if [[ "$pid" =~ ^[0-9]+$ ]] && daemon_pid_matches "$pid"; then
+            kill "$pid" 2>/dev/null && stopped=1 || true
+            for _ in $(seq 1 20); do
+                kill -0 "$pid" 2>/dev/null || break
+                sleep 0.05
+            done
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+        fi
+    fi
+    rm -f "$DAEMON_PIDFILE"
+    [ "$stopped" = 1 ]
+}
 
 
 # 在常见的 Steam 安装布局里找创意工坊目录。
@@ -71,20 +147,14 @@ case "${1:-}" in
         exit 0
         ;;
     --stop)
+        # 先写停止标记，再终止进程。守护可能正好在恢复线程里；它及其
+        # 已启动的 --apply-plan 子进程都会看到这个标记并退出，不会复活壁纸。
+        touch "$STOP_MARKER"
         stopped=0
-        if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-            kill "$(cat "$PIDFILE")" 2>/dev/null && stopped=1
-        fi
-        # pidfile 可能过期，再按进程名兜两次：SIGTERM 可能被渲染器线程
-        # 屏蔽（见下方切换注释），SIGKILL 保底
-        pkill -f "linux-wallpaperengine.*--gnome" 2>/dev/null && stopped=1
-        sleep 0.2
-        pkill -9 -f "linux-wallpaperengine.*--gnome" 2>/dev/null && stopped=1
+        if stop_renderers; then stopped=1; fi
         rm -f "$PIDFILE"
         # 连守护一起停(它只在壁纸运行时有意义)
-        [ -f "$STATE_DIR/suspend-daemon.pid" ] && \
-            kill "$(cat "$STATE_DIR/suspend-daemon.pid")" 2>/dev/null
-        rm -f "$STATE_DIR/suspend-daemon.pid"
+        if stop_daemon; then stopped=1; fi
         if [ "$stopped" = 1 ]; then
             # 停止即撤掉登录自启，与图形界面的「停止」按钮行为一致——
             # 用户明确要停，重启后壁纸不该自己回来。再选壁纸时会重建。
@@ -96,8 +166,9 @@ case "${1:-}" in
         exit 0
         ;;
     --status)
-        if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-            echo "运行中 (PID $(cat "$PIDFILE"))"
+        pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+        if [[ "$pid" =~ ^[0-9]+$ ]] && renderer_pid_matches "$pid"; then
+            echo "运行中 (PID $pid)"
         else
             echo "未运行"
         fi
@@ -112,6 +183,28 @@ esac
 if [ ! -x "$BIN" ]; then
     echo "渲染器还没编译: $BIN" >&2
     echo "先跑 install.sh，或用 LWE_BIN 指定其他位置" >&2
+    exit 1
+fi
+
+# 普通用户启动意味着重新允许壁纸；守护恢复则必须尊重用户刚执行的
+# --stop。环境标记由 suspend_daemon.py 传入，避免恢复路径误删停止标记。
+if [ "${LWE_RECOVERY:-}" = "1" ]; then
+    if [ -e "$STOP_MARKER" ]; then
+        echo "壁纸已被用户停止，跳过自动恢复" >&2
+        exit 75
+    fi
+else
+    rm -f "$STOP_MARKER"
+fi
+
+# --gnome 模式本身是普通 xdg-shell 窗口；只有 GNOME 扩展启用后才会把
+# 它克隆进桌面背景并隐藏原窗口。扩展被手动禁用、安装后未写入启用列表，
+# 或升级后 GNOME 恢复了禁用状态时，直接启动会让全屏窗口盖住顶栏和 Dock。
+# 启动前先幂等启用扩展，失败就中止，避免留下一个覆盖桌面的窗口。
+if ! PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m wallpaper_picker.gnome_extension; then
+    echo "无法启用 GNOME 扩展 $EXT_UUID，已取消启动以避免覆盖桌面" >&2
+    echo "请确认 GNOME Shell 正在运行，并执行: gnome-extensions enable $EXT_UUID" >&2
     exit 1
 fi
 
@@ -169,17 +262,9 @@ if [ ${#RENDER_ARGS[@]} -eq 0 ] || [ -z "${RENDER_ARGS[0]}" ]; then
     exit 1
 fi
 
-# 先停掉旧实例。轮询等它真的退出（通常几十毫秒），而不是固定 sleep 1——
-# 固定等待会让切换壁纸白等一秒，图形界面调用时尤其明显。
-pkill -f "linux-wallpaperengine.*--gnome" 2>/dev/null
-for _ in $(seq 1 20); do
-    pgrep -f "linux-wallpaperengine.*--gnome" >/dev/null 2>&1 || break
-    sleep 0.05
-done
-# 实测渲染器的线程会屏蔽 SIGTERM（NVIDIA 驱动库的常见行为）：外接屏
-# 断开后挂在死屏上的旧实例能无限期无视 SIGTERM，越积越多还占着已消失
-# 的屏。SIGKILL 对 S 状态进程必杀，作为兜底。
-pkill -9 -f "linux-wallpaperengine.*--gnome" 2>/dev/null || true
+# 先停掉旧实例。只匹配当前 BIN 且带 --gnome 的进程，避免误杀其它用户
+# 或 LWE_BIN 指向的另一种渲染器。轮询等它真的退出，SIGKILL 保底。
+stop_renderers || true
 
 # 从参数列表里提取屏幕名给成功消息用（--screen-root 的下一个 token）
 SCREEN_LIST=""
@@ -195,13 +280,8 @@ nohup "$BIN" \
     "$@" \
     > "$LOG" 2>&1 &
 
-echo $! > "$PIDFILE"
-
-# 挂起唤醒守护:唤醒后显示布局可能被重新协商,渲染器窗口持旧尺寸导致
-# 顶栏/Dock 区域铺不上(实测重启即恢复)。守护幂等,已有实例不会重复。
-if [ -f "$SCRIPT_DIR/wallpaper_picker/suspend_daemon.py" ]; then
-    nohup python3 "$SCRIPT_DIR/wallpaper_picker/suspend_daemon.py" > /dev/null 2>&1 &
-fi
+RENDERER_PID=$!
+echo "$RENDERER_PID" > "$PIDFILE"
 
 # 轮询确认进程活着。只要熬过 STARTUP_GRACE 就算启动成功，
 # 期间进程死掉则立刻报错——比原来的固定 sleep 3 快得多。
@@ -209,7 +289,7 @@ STARTUP_GRACE=6   # 单位 0.1 秒，即 0.6 秒
 alive=0
 for _ in $(seq 1 "$STARTUP_GRACE"); do
     sleep 0.1
-    if ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    if ! renderer_pid_matches "$RENDERER_PID"; then
         alive=-1
         break
     fi
@@ -217,10 +297,26 @@ for _ in $(seq 1 "$STARTUP_GRACE"); do
 done
 
 if [ "$alive" = 1 ]; then
+    # --stop 可能在启动检查期间并发写入标记。恢复路径再次确认，避免
+    # 恢复脚本在用户停止动作之后才把新窗口拉起来。
+    if [ "${LWE_RECOVERY:-}" = "1" ] && [ -e "$STOP_MARKER" ]; then
+        stop_renderers || true
+        rm -f "$PIDFILE"
+        stop_daemon || true
+        echo "壁纸已被用户停止，取消自动恢复" >&2
+        exit 75
+    fi
+    # 只有渲染器通过启动检查后才拉起守护，失败路径不会留下孤儿进程。
+    if [ -f "$SCRIPT_DIR/wallpaper_picker/suspend_daemon.py" ]; then
+        nohup python3 "$SCRIPT_DIR/wallpaper_picker/suspend_daemon.py" > /dev/null 2>&1 &
+    fi
     echo "壁纸已启动 (PID $(cat "$PIDFILE")，屏:${SCREEN_LIST:-$SCREEN})"
     echo "日志: $LOG"
 else
     echo "启动失败，日志末尾:" >&2
     tail -20 "$LOG" >&2
+    stop_renderers || true
+    stop_daemon || true
+    rm -f "$PIDFILE"
     exit 1
 fi

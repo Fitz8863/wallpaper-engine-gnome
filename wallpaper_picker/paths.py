@@ -169,6 +169,9 @@ def wallpaper_bg_arg(wid):
     同 ID 另一张壁纸的属性）。判定逻辑与 start-wallpaper.sh 保持一致，
     两处改动要同步。
     """
+    if not isinstance(wid, str) or not wid:
+        raise ValueError("没有可恢复的壁纸")
+
     steam_ws = find_steam_workshop()
     if steam_ws and os.path.isdir(os.path.join(steam_ws, wid)):
         return wid
@@ -518,7 +521,11 @@ if __name__ == "__main__":
             else:
                 bg_id = launch_args[i]
                 i += 1
-        plan = plan_launch(bg_id, explicit or None, all_screens)
+        try:
+            plan = plan_launch(bg_id, explicit or None, all_screens)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(1)
         try:
             with open(state_settings_path(), encoding="utf-8") as fh:
                 settings = json.load(fh)
